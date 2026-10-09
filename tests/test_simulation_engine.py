@@ -199,3 +199,16 @@ def test_lineup_trace_matches_team_totals(cal, schedule):
                 from_trace += eng.lib.stats[t["idx"], sim, t["day"]]
         assert np.allclose(from_trace, eng.team_totals(roster)[sim])
         assert max(sum(1 for t in trace if t["day"] == d and t["slot"] != "BENCH") for d in range(7)) <= s.active_slots
+
+
+def test_recommend_can_evaluate_low_board_players_and_reports_per_game_rank(cal, schedule):
+    eng, s, _ = small_engine(cal, schedule, my_slot=1)
+    st = DraftState(s, centers=set(eng.center_ids))
+    base = eng.recommend(st, top_k=5, rollouts=1)
+    assert "pergame_rank" in base.columns and base["pergame_rank"].between(1, 40).all()
+    low_board = int(eng.pid[eng.static_order[-1]])                 # the player the board ranks last
+    rec = eng.recommend(st, top_k=5, rollouts=1, extra_candidates=[low_board])
+    assert low_board in set(rec["player_id"]) and low_board not in set(base["player_id"])   # only evaluated when asked for
+    # per-game candidates are an opt-in widening of the pool and never remove anyone
+    wide = eng.recommend(st, top_k=3, rollouts=1, pergame_k=5)
+    assert set(eng.recommend(st, top_k=3, rollouts=1)["player_id"]) <= set(wide["player_id"])

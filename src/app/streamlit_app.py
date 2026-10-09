@@ -31,6 +31,9 @@ from src.simulation.copula import Library
 DATA = ROOT / "data" / "processed"
 DB_PATH = Path(os.environ.get("NBA_DB", DATA / "nba.db"))  # override to keep test drafts out of the real DB
 PER_GAME_COLS = ["mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
+COL_LABELS = {"name": "Player", "pos": "Pos", "team": "Team", "age_t": "Age", "espn_adp": "ESPN ADP", "gp82": "Proj GP",
+              "rank": "Board rank", "pg_rank": "Per-game rank", "mpg": "MPG", "pts": "PPG", "tpm": "3PM", "reb": "REB",
+              "ast": "AST", "stl": "STL", "blk": "BLK", "fg_pct": "FG%", "ft_pct": "FT%", "tov": "TO", "z_total": "Value"}
 
 st.set_page_config(page_title="NBA Fantasy Draft Helper", page_icon="🏀", layout="wide")
 
@@ -58,6 +61,10 @@ def load_data():
     proj["team"] = proj["team_id"].map(abbr).fillna("FA")
     proj["pos"] = proj["elig"]
     proj = proj[proj["player_id"].isin(lib.player_ids)].reset_index(drop=True)
+    from src.draft.values import z_scores
+    proj["gp82"] = (proj["avail"] * 82).round(0)                                   # projected games played over an 82-game season
+    proj["pg_rank"] = (z_scores(proj.assign(avail=1.0))["z_total"].rank(ascending=False, method="first")
+                       .astype(int).to_numpy())                                     # value rank ignoring availability
     return proj, lib, year
 
 
@@ -68,9 +75,9 @@ def get_engine(_proj, _lib, settings: LeagueSettings) -> DraftEngine:
 
 @st.cache_data(show_spinner="Simulating the rest of the draft...")
 def cached_recommend(_engine: DraftEngine, settings: LeagueSettings, picks: tuple, excluded: tuple,
-                     top_k: int, rollouts: int) -> pd.DataFrame:
+                     top_k: int, rollouts: int, extra: tuple = ()) -> pd.DataFrame:
     state = DraftState(settings, list(picks), set(excluded), set(_engine.center_ids))
-    return _engine.recommend(state, top_k=top_k, rollouts=rollouts)
+    return _engine.recommend(state, top_k=top_k, rollouts=rollouts, pergame_k=10, extra_candidates=list(extra))
 
 
 @st.cache_data(show_spinner="Projecting every team...")
@@ -89,8 +96,10 @@ def label(row) -> str:
 
 def roster_frame(proj_by_id: pd.DataFrame, ids: list[int]) -> pd.DataFrame:
     if not ids:
-        return pd.DataFrame(columns=["name", "pos", "team"] + PER_GAME_COLS)
-    return proj_by_id.loc[ids, ["name", "pos", "team"] + PER_GAME_COLS].round(2)
+        return pd.DataFrame(columns=["name", "pos", "team", "gp82"] + PER_GAME_COLS).rename(columns=COL_LABELS)
+    out = proj_by_id.loc[ids, ["name", "pos", "team", "gp82"] + PER_GAME_COLS].copy()
+    out[["fg_pct", "ft_pct"]] *= 100
+    return out.round(1).reset_index(drop=True).rename(columns=COL_LABELS)
 
 
 def cat_columns() -> dict:
@@ -151,6 +160,12 @@ with st.sidebar.expander("League settings", expanded=False):
 
 top_k = st.sidebar.slider("Candidates to evaluate", 10, 60, 30, 5)
 rollouts = st.sidebar.slider("Mock-draft rollouts per candidate", 1, 6, 2)
+_label2id = {f"{r['name']} (board #{int(r['rank'])})": int(r["player_id"]) for _, r in proj.sort_values("rank").iterrows()}
+_picked = st.sidebar.multiselect(
+    "Always evaluate these players", list(_label2id),
+    help="The recommender simulates the top board/per-game players. A player the availability-discounted board ranks low "
+         "(e.g. a star coming off an injury-shortened year) is skipped unless you add him here.")
+watch = [_label2id[x] for x in _picked]
 
 c1, c2 = st.sidebar.columns(2)
 if c1.button("↩ Undo last pick", disabled=not state.picks, width="stretch"):
@@ -209,30 +224,39 @@ with tab_draft:
         else:
             plan = state.my_turn or st.toggle("Plan my next pick (simulate bots up to it)", value=False)
             if plan:
-                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), top_k, rollouts)
+                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), top_k, rollouts, tuple(sorted(watch)))
                 if rec.empty:
                     st.write("Nothing to evaluate.")
                 else:
                     best = rec.iloc[0]
                     st.markdown(f"**Best pick: {best['name']}** — {best['win_prob']:.1%} chance to win a weekly matchup "
                                 f"(≈ {best['exp_wins']:.1f} wins over {S.reg_season_weeks} weeks). "
-                                f"Static rank #{int(best['static_rank'])}.")
-                    show = rec[["name", "elig", "static_rank", "win_prob", "vs_top_ranked"]
-                               + [f"cat_{c}" for c in CATEGORIES]].copy()
-                    pct_cols = ["win_prob", "vs_top_ranked"] + [f"cat_{c}" for c in CATEGORIES]
+                                f"Board rank #{int(best['static_rank'])}, per-game rank #{int(best['pergame_rank'])}.")
+                    stat_cols = ["gp82", "mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
+                    info = proj_by_id.loc[rec["player_id"], stat_cols].reset_index(drop=True)
+                    info[["fg_pct", "ft_pct"]] *= 100
+                    cat_cols_ = [f"cat_{c}" for c in CATEGORIES]
+                    show = pd.concat([rec[["name", "elig", "static_rank", "pergame_rank", "win_prob", "vs_top_ranked"]].reset_index(drop=True),
+                                      info, rec[cat_cols_].reset_index(drop=True)], axis=1)
+                    pct_cols = ["win_prob", "vs_top_ranked"] + cat_cols_
                     show[pct_cols] = show[pct_cols] * 100
-                    show = show.rename(
-                        columns={"name": "Player", "elig": "Pos", "static_rank": "Rank",
-                                 "win_prob": "Win %", "vs_top_ranked": "vs top-ranked"})
+                    show = show.rename(columns={**COL_LABELS, "elig": "Pos", "static_rank": "Board rank", "pergame_rank": "Per-game rank",
+                                                "win_prob": "Win %", "vs_top_ranked": "vs top-ranked"})
+                    one = st.column_config.NumberColumn
                     st.dataframe(
                         show, hide_index=True, width="stretch", height=620,
-                        column_config={"Win %": st.column_config.NumberColumn(format="%.1f%%"),
-                                       "vs top-ranked": st.column_config.NumberColumn(format="%+.1f%%"),
-                                       **cat_columns()},
+                        column_config={"Win %": one(format="%.1f%%"), "vs top-ranked": one(format="%+.1f%%"),
+                                       "Proj GP": one(format="%.0f"), "MPG": one(format="%.1f"), "PPG": one(format="%.1f"),
+                                       "3PM": one(format="%.1f"), "REB": one(format="%.1f"), "AST": one(format="%.1f"),
+                                       "STL": one(format="%.1f"), "BLK": one(format="%.1f"), "TO": one(format="%.1f"),
+                                       "FG%": one(format="%.1f%%"), "FT%": one(format="%.1f%%"), **cat_columns()},
                     )
                     st.caption("Win % = chance my team beats a random opponent in a weekly matchup if I take this player and "
-                               "the rest of the draft plays out like the mock-draft model. Category columns = chance to win each "
-                               "category. Compare candidates by difference, not absolute level.")
+                               "the rest of the draft plays out like the mock-draft model; category columns = chance to win each "
+                               "category. Compare candidates by difference, not absolute level. Proj GP = projected games played "
+                               "(of 82); MPG/PPG/etc. are per-game averages when he plays. Board rank discounts counting stats by "
+                               "projected games; per-game rank ignores availability. The pool includes the top per-game players "
+                               "even if the availability-discounted board ranks them low.")
             else:
                 st.info("Not your turn yet. Enter picks as they happen, or flip the toggle to plan ahead.")
 
@@ -283,8 +307,10 @@ with tab_board:
         b = b[b["name"].str.contains(q, case=False, na=False)]
     if pos:
         b = b[b["position_1"].isin(pos)]
-    cols = ["rank", "name", "pos", "team", "age_t", "espn_adp"] + PER_GAME_COLS + ["avail", "z_total"]
-    st.dataframe(b[cols].round(2), hide_index=True, width="stretch", height=560)
+    cols = ["rank", "pg_rank", "name", "pos", "team", "age_t", "espn_adp", "gp82"] + PER_GAME_COLS + ["z_total"]
+    bb = b[cols].copy()
+    bb[["fg_pct", "ft_pct"]] *= 100
+    st.dataframe(bb.round(1).rename(columns=COL_LABELS), hide_index=True, width="stretch", height=560)
     st.divider()
     st.caption("Flag a player who is injured / out for the start of the season: the recommender will skip him and "
                "assume nobody drafts him in the mock draft.")

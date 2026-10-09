@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 
 from src.draft.state import DraftState, LeagueSettings, team_for_pick
-from src.draft.values import CATEGORIES, CAT_LABELS
+from src.draft.values import CATEGORIES, CAT_LABELS, z_scores
 from src.simulation.library import STAT_IDX, Library
 
 DEDICATED = ["C", "PG", "SG", "SF", "PF"]
@@ -78,6 +78,15 @@ class DraftEngine:
         self.rank = np.empty(len(order), dtype=int)
         self.rank[order] = np.arange(len(order))
         self.static_order = order
+        # A second ordering that ignores availability (pure per-game value). The board above discounts every counting stat by
+        # projected games played, which can bury a star coming off an injury-shortened year; this lets such players still be
+        # *evaluated* by the simulation (which models injuries directly) via recommend(..., pergame_k=N).
+        pg = self.proj.copy()
+        pg["avail"] = 1.0
+        zpg = z_scores(pg, n_pool=min(156, len(pg)))["z_total"].to_numpy()
+        self.pergame_order = np.argsort(-zpg, kind="stable")
+        self.pergame_rank = np.empty(len(zpg), dtype=int)
+        self.pergame_rank[self.pergame_order] = np.arange(len(zpg))
         # What bots draft by: ESPN's average draft position where known (auto-draft and most managers follow it),
         # otherwise our own static rank, placed after the ADP-ranked players.
         adp = self.proj["espn_adp"].to_numpy(float) if "espn_adp" in self.proj else np.full(len(self.pid), np.nan)
@@ -209,7 +218,7 @@ class DraftEngine:
         return np.flatnonzero(~taken)
 
     def recommend(self, state: DraftState, top_k: int = 25, rollouts: int = 2,
-                  extra_candidates: list[int] | None = None) -> pd.DataFrame:
+                  extra_candidates: list[int] | None = None, pergame_k: int = 0) -> pd.DataFrame:
         """
         Rank candidates for my next pick by simulated matchup win probability.
         If it is not my turn yet, the bots' picks up to my next pick are
@@ -230,6 +239,9 @@ class DraftEngine:
             if cand_list is None:  # rollout 0 defines the candidate pool
                 ok = lambda i: not taken[i] and not (self.is_center[i] and cc[me - 1] >= cap)
                 cand_list = [i for i in self.static_order if ok(i)][:top_k]
+                for i in [j for j in self.pergame_order if ok(j)][:pergame_k]:   # stars the availability-discounted board buries
+                    if i not in cand_list:
+                        cand_list.append(i)
                 for p in extra_candidates or []:
                     i = self.idx_of.get(int(p))
                     if i is not None and ok(i) and i not in cand_list:
@@ -252,7 +264,7 @@ class DraftEngine:
             if not res:
                 continue
             cw = np.mean([x[1] for x in res], axis=0)
-            row = {"player_id": int(self.pid[c]), "static_rank": int(self.rank[c]) + 1,
+            row = {"player_id": int(self.pid[c]), "static_rank": int(self.rank[c]) + 1, "pergame_rank": int(self.pergame_rank[c]) + 1,
                    "win_prob": float(np.mean([x[0] for x in res])), "n_rollouts": len(res)}
             row.update({f"cat_{k}": float(v) for k, v in zip(CATEGORIES, cw)})
             rows.append(row)
