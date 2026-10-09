@@ -1,0 +1,3 @@
+*.db binary
+*.npz binary
+*.parquet binary

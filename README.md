@@ -82,7 +82,7 @@ are absent; only regular-season weeks are modelled (no playoff-seeding model).
 | `nba_api` `ScheduleLeagueV2` | the published regular-season schedule — drives which days every team plays | `ingest.py` loads it for the season after the latest played |
 | ESPN fantasy API (`fetch_espn_positions.py`) | exact position eligibility + average draft position | optional but recommended; run where ESPN is reachable |
 
-Everything lives in one SQLite file (`data/processed/nba.db`, gitignored); schema in `schema.sql`, design
+Everything lives in one SQLite file (`data/processed/nba.db`, committed so a fresh clone works without re-ingesting; re-run `scripts/ingest.py` to refresh); schema in `schema.sql`, design
 notes in `docs/data_model.md`. Box-score completeness was checked on ingest: ≈99% of team-games sum to
 240 (+5/OT) minutes.
 

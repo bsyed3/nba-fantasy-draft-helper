@@ -8,15 +8,9 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data (raw pulls and large generated libraries shouldn't live in git)
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
-data/external/*
-!data/external/.gitkeep
-*.parquet
-*.npz
+# Data files ARE committed (database, projections, simulation library, validation outputs) so a fresh clone works
+# without re-ingesting. Logs are not data, so they stay out.
+*.log
 
 # OS / editor
 .DS_Store

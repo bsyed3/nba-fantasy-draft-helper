@@ -7,7 +7,7 @@ simulation library for a projection set.
 
 Needs the outputs of scripts/build_projections.py (projections, backtest
 residuals, rookie profiles). Writes data/processed/calibration.json and
-library_<year>.npz (gitignored; ~50 MB for 614 players x ~1000 simulated weeks).
+library_<year>.npz (~6 MB on disk, ~62 MB in memory for 614 players x ~720 simulated matchups).
 The simulated matchups are the real matchup periods of the season's schedule (the published
 future schedule when `scripts/ingest.py` has loaded it) -- Mon-Sun weeks, with the opening and
 All-Star stretches as two-week periods (2026-27: week 17 = Feb 15-28) -- played game by game.

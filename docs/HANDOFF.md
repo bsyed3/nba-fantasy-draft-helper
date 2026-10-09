@@ -53,7 +53,8 @@ Objective of the recommender: maximise **P(win the weekly matchup)** over simula
 - Headless UI test: `streamlit.testing.v1.AppTest`; point `NBA_DB` at a *copy* of the DB so test leagues don't pollute the real one. (AppTest cannot
   serialise multiselects whose options are ints — use string options.) The running dev server caches the engine with `st.cache_resource`:
   **restart the server after changing engine code** or it keeps the stale object.
-- The real `data/processed/nba.db` holds the user's league/draft state once they use the app; don't wipe it.
+- The real `data/processed/nba.db` holds the user's league/draft state once they use the app; don't wipe it. It is **committed in a public repo**, so avoid committing it mid-draft with real picks in it
+  (currently it has one empty league, `ESPN 10-team`, slot 1, no picks). Each re-commit of the DB adds ~30 MB to git history; commit it only when the data actually changed.
 
 ## 4. How to run everything
 
@@ -73,7 +74,7 @@ Diagnostics in `scripts/analysis/` (read-only, portable paths): `injury_recovery
 `returner_gap.py` (players who played zero games last season and returned), `availability_bias.py` (is availability/minutes biased for
 "usually healthy, one bad year" / "recovered" groups — selection-free), `bot_spread_and_board.py` (how far the mock bots spread players; why the board disagrees with the market).
 
-`data/processed/` (gitignored): `nba.db` (~30 MB), `projections_2026.{parquet,csv}`, `backtest_summary.csv`, `backtest_oos.parquet`,
+`data/processed/` (**committed to git** since 2026-10-09, ~38 MB total, so a fresh clone runs without re-ingesting; logs are gitignored; the repo is **public**): `nba.db` (~31 MB), `projections_2026.{parquet,csv}`, `backtest_summary.csv`, `backtest_oos.parquet`,
 `rookie_profiles.csv`, `calibration.json`, `library_2026.npz` (~6 MB compressed / 62 MB in memory), validation CSVs/logs.
 Rebuild order matters: ingest → projections → library → (validate) → report. The model code is currently the same as when the report/validation were last
 generated (two experiments were reverted — §7), so those artifacts are consistent.
