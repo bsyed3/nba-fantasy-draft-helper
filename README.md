@@ -70,7 +70,7 @@ them are far more reliable than the absolute win percentages (which are relative
 **Stated simplifications:** the daily lineup is a greedy fill in static-value order, not a per-day optimal
 assignment; bots draft by ESPN ADP (or our rank if ADP is missing) plus noise, not positional need or personal
 bias; IR is not modelled (a drafted player who is hurt just misses games); the schedule's still-TBD NBA Cup games
-are absent; only regular-season weeks are modelled (no playoff-seeding model).
+are absent. The library simulates all 21 matchup weeks (18 regular-season + the 3 fantasy playoff weeks, Mar 8-28; `--no-playoffs` for the regular season only) and every pick is judged on their average weekly win probability; there is no playoff-seeding model (who qualifies).
 
 ## Data
 
@@ -109,7 +109,10 @@ Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id
 each season: project → simulate → mock-draft (engine vs "best available") → score the final rosters on
 that season's **actual day-by-day box scores**. `--arms adaptive` adds the category-aware policy
 (`src/draft/policy.py`: each pick takes the candidate that best raises P(win ≥5 of 9 categories) for the roster it
-builds; `scripts/analysis/adaptive_policy_test.py` compares it with board order on paired mock drafts). `scripts/build_projections.py` also prints the projection backtest
+builds; this is the app's "Best pick", with every player up to board rank 200 still ranked in the table by simulated win %;
+`scripts/analysis/adaptive_policy_test.py` compares it with board order on paired mock drafts;
+`scripts/analysis/simulation_realism.py` checks the simulated weekly spread and matchup probabilities against what really happened in 2022-25;
+`scripts/analysis/library_diagnostics.py` checks the library against the projections it was built from). `scripts/build_projections.py` also prints the projection backtest
 (out-of-sample error per stat vs the shrunken-average baseline) and saves it to `data/processed/backtest_summary.csv`.
 
 **[`docs/REPORT.md`](docs/REPORT.md)** (also `docs/REPORT.html`, self-contained with embedded figures) is the complete

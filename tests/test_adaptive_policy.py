@@ -138,3 +138,32 @@ def test_lineup_usage_reporting_does_not_change_totals_and_top_players_always_pl
     assert all(0 <= u <= p for u, p in usage.values())
     w = calibrate_rank_weights(eng, [ros, list(range(10, 18))])
     assert w.shape == (8,) and w[0] == 1.0 and (w >= 0).all() and (w <= 1).all()
+
+
+# ---------------------------------------------------------------------------
+# live-draft planning (what the app calls)
+# ---------------------------------------------------------------------------
+def test_plan_matches_the_mock_draft_strategy_on_my_turn_and_reports_what_it_weighed():
+    lines = {1: dict(tpm=20), 2: dict(tpm=10, reb=10), 3: dict(ast=10, stl=10, blk=10),
+             4: dict(tpm=30), 5: dict(reb=11, ast=11, stl=11), 6: {}}
+    eng, s = hand_engine(lines, z_total=[9, 5, 4, 8, 7, 1])
+    state = DraftState(s, [(1, 1, 1), (2, 2, 2), (3, 2, 3)])
+    pol = AdaptivePolicy(eng, n_candidates=4, margin=0.0, rank_weights=np.ones(2))
+    pick, table = pol.plan(state)
+    assert pick == adaptive_pick(pol)(eng, state) == 5
+    assert set(table["player_id"]) == {4, 5, 6} and table["chosen"].sum() == 1
+    assert table.iloc[0]["player_id"] == 5 and table["proxy_win_prob"].is_monotonic_decreasing
+    assert table.set_index("player_id").loc[4, "board_rank"] < table.set_index("player_id").loc[5, "board_rank"]   # the board prefers 4
+    state.picks.append((4, 1, 5))
+    done_pick, done_table = pol.plan(state)                                                                      # draft over: nothing to plan
+    assert done_pick is None and done_table.empty
+
+
+def test_plan_ahead_plays_out_the_bots_and_never_offers_a_drafted_player(cal, schedule):
+    eng, s = small_engine(cal, schedule, my_slot=3)
+    pol = AdaptivePolicy(eng, n_candidates=5)
+    state = DraftState(s, centers=set(eng.center_ids))                     # pick 1 of 4 teams; I pick third
+    pick, table = pol.plan(state)
+    assert pick is not None and pick in set(table["player_id"])
+    assert not (set(table["player_id"]) & state.drafted)
+    assert len(table) == 5 and table["board_rank"].min() >= 3              # two bots already took players before my pick

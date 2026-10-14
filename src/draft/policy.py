@@ -24,8 +24,10 @@ from __future__ import annotations
 import copy
 
 import numpy as np
+import pandas as pd
 
 from src.draft.engine import DraftEngine, category_matrix
+from src.draft.state import DraftState
 from src.draft.values import CATEGORIES
 
 # Share of a roster slot's simulated weekly production that the real daily lineup actually uses, by rank within
@@ -119,6 +121,27 @@ class AdaptivePolicy:
         board_choice, board_p = scored[0]
         best, best_p = max(scored, key=lambda x: x[1])
         return best if best_p > board_p + self.margin else board_choice
+
+    def plan(self, state: DraftState) -> tuple[int | None, pd.DataFrame]:
+        """
+        The policy's pick for MY next pick given the live draft state, and the candidates it weighed. If it is not my turn
+        yet, the bots' picks up to mine are played out first (in their noise-free order). Returns (player_id or None,
+        table with player_id / board_rank / proxy_win_prob / chosen, sorted by proxy win probability).
+        """
+        e = self.engine
+        my_pick = state.my_next_pick_no()
+        if my_pick is None or state.done:
+            return None, pd.DataFrame(columns=["player_id", "board_rank", "proxy_win_prob", "chosen"])
+        taken, rosters = e._initial(state)
+        cc, ptr, orders = e._center_counts(rosters), [0] * e.settings.n_teams, self.plain_orders()
+        e._advance(taken, rosters, ptr, orders, cc, state.next_pick_no, my_pick - 1, plain=True)
+        scored = self.score_candidates(taken, rosters, ptr, orders, cc, my_pick)
+        board_choice, board_p = scored[0]
+        best, best_p = max(scored, key=lambda x: x[1])
+        choice = best if best_p > board_p + self.margin else board_choice
+        table = pd.DataFrame({"player_id": [int(e.pid[c]) for c, _ in scored], "board_rank": [int(e.rank[c]) + 1 for c, _ in scored],
+                              "proxy_win_prob": [p for _, p in scored], "chosen": [c == choice for c, _ in scored]})
+        return int(e.pid[choice]), table.sort_values("proxy_win_prob", ascending=False).reset_index(drop=True)
 
 
 def calibrate_rank_weights(engine: DraftEngine, rosters: list[list[int]]) -> np.ndarray:

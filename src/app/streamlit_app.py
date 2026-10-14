@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.draft import store
 from src.draft.engine import DEFAULT_PICK_MARGIN, DraftEngine, recommended_pick
+from src.draft.policy import AdaptivePolicy
 from src.draft.state import DraftState, LeagueSettings
 from src.draft.values import CAT_LABELS, CATEGORIES
 from src.simulation.copula import Library
@@ -76,6 +77,11 @@ def load_data():
 @st.cache_resource
 def get_engine(_proj, _lib, settings: LeagueSettings) -> DraftEngine:
     return DraftEngine(_lib, _proj, settings)
+
+
+@st.cache_resource
+def get_policy(_engine: DraftEngine, settings: LeagueSettings) -> AdaptivePolicy:
+    return AdaptivePolicy(_engine)
 
 
 @st.cache_data(show_spinner="Simulating the rest of the draft...")
@@ -167,6 +173,12 @@ max_rank = st.sidebar.slider("Evaluate every player up to board rank", 30, 300, 
                              help="Every player still available whose board rank is within this cap is simulated as my pick "
                                   "(about 3-4 seconds at 200).")
 rollouts = st.sidebar.slider("Mock-draft rollouts per candidate", 1, 6, 2)
+pick_rule = st.sidebar.radio(
+    "Best-pick rule", ["Category-aware policy", "Engine simulation"],
+    help="Category-aware policy (default): of the board's top few available players, take the one whose finished roster is most "
+         "likely to win at least 5 of 9 categories; on real 2022-25 seasons it beat drafting by the board by about +3 points of "
+         "weekly win probability. Engine simulation: the highest simulated win % in the table below (near-ties go to the better-ranked player). "
+         "In 60 simulated drafts the two rules were within noise of each other; the policy is far quicker.")
 _label2id = {f"{r['name']} (board #{int(r['rank'])})": int(r["player_id"]) for _, r in proj.sort_values("rank").iterrows()}
 _picked = st.sidebar.multiselect(
     "Always evaluate these players", list(_label2id),
@@ -231,20 +243,42 @@ with tab_draft:
         else:
             plan = state.my_turn or st.toggle("Plan my next pick (simulate bots up to it)", value=False)
             if plan:
-                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), max_rank, rollouts, tuple(sorted(watch)))
+                policy = get_policy(engine, S)
+                pol_pick, pol_table = policy.plan(state)
+                extra = set(watch) | ({pol_pick} if pol_pick is not None else set())     # the policy's pick must be in the table
+                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), max_rank, rollouts, tuple(sorted(extra)))
                 if rec.empty:
                     st.write("Nothing to evaluate.")
                 else:
-                    best = recommended_pick(rec)
+                    eng_best = recommended_pick(rec)
+                    use_policy = pick_rule.startswith("Category") and pol_pick is not None and pol_pick in set(rec["player_id"])
+                    best = rec[rec["player_id"] == pol_pick].iloc[0] if use_policy else eng_best
                     st.markdown(f"**Best pick: {best['name']}** — {best['win_prob']:.1%} chance to win a weekly matchup "
                                 f"(≈ {best['exp_wins']:.1f} wins over {S.reg_season_weeks} weeks). "
                                 f"Board rank #{int(best['static_rank'])}, per-game rank #{int(best['pergame_rank'])}. "
                                 f"{len(rec)} players simulated.")
-                    top = rec.iloc[0]
-                    if top["player_id"] != best["player_id"]:
-                        st.caption(f"Highest simulated number: {top['name']} ({top['win_prob']:.1%}). It is within "
-                                   f"{DEFAULT_PICK_MARGIN:.0%} of {best['name']}, so the board-ranked player is recommended: "
-                                   f"with this many candidates, differences that small are mostly simulation noise.")
+                    if use_policy:
+                        same = "the engine's simulation agrees." if eng_best["player_id"] == best["player_id"] else \
+                            f"the engine's own top choice is {eng_best['name']} ({eng_best['win_prob']:.1%})."
+                        st.caption(f"Chosen by the category-aware policy: {same}")
+                        with st.expander("Why this pick? Category-aware candidates"):
+                            why = pol_table.assign(Player=proj_by_id.loc[pol_table["player_id"], "name"].to_numpy())
+                            why["vs board's top"] = (why["proxy_win_prob"] - why.sort_values("board_rank").iloc[0]["proxy_win_prob"]) * 100
+                            why["proxy_win_prob"] *= 100
+                            why["Pick"] = np.where(why["chosen"], "★", "")
+                            st.dataframe(why[["Pick", "Player", "board_rank", "proxy_win_prob", "vs board's top"]].rename(
+                                columns={"board_rank": "Board rank", "proxy_win_prob": "P(win ≥5 of 9) %"}), hide_index=True, width="stretch",
+                                column_config={"P(win ≥5 of 9) %": st.column_config.NumberColumn(format="%.1f"),
+                                               "vs board's top": st.column_config.NumberColumn(format="%+.1f")})
+                            st.caption(f"Each of the board's top {len(why)} available players is added to my roster, the draft is finished with "
+                                       f"the bots' usual order, and the whole roster is scored on the simulated weeks. A player is taken over the "
+                                       f"board's top choice only if he is ahead by more than {policy.margin * 100:.0f} points (smaller gaps are noise).")
+                    else:
+                        top = rec.iloc[0]
+                        if top["player_id"] != best["player_id"]:
+                            st.caption(f"Highest simulated number: {top['name']} ({top['win_prob']:.1%}). It is within "
+                                       f"{DEFAULT_PICK_MARGIN:.0%} of {best['name']}, so the board-ranked player is recommended: "
+                                       f"with this many candidates, differences that small are mostly simulation noise.")
                     stat_cols = ["gp82", "gp_med", "gp_rng", "mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
                     info = proj_by_id.loc[rec["player_id"], stat_cols].reset_index(drop=True)
                     info[["fg_pct", "ft_pct"]] *= 100
@@ -253,6 +287,7 @@ with tab_draft:
                                       info, rec[cat_cols_].reset_index(drop=True)], axis=1)
                     pct_cols = ["win_prob", "vs_top_ranked"] + cat_cols_
                     show[pct_cols] = show[pct_cols] * 100
+                    show.insert(0, "Pick", ["★" if p == best["player_id"] else "" for p in rec["player_id"]])
                     show = show.rename(columns={**COL_LABELS, "elig": "Pos", "static_rank": "Board rank", "pergame_rank": "Per-game rank",
                                                 "win_prob": "Win %", "vs_top_ranked": "vs top-ranked"})
                     one = st.column_config.NumberColumn
@@ -264,7 +299,9 @@ with tab_draft:
                                        "STL": one(format="%.1f"), "BLK": one(format="%.1f"), "TO": one(format="%.1f"),
                                        "FG%": one(format="%.1f%%"), "FT%": one(format="%.1f%%"), **cat_columns()},
                     )
-                    st.caption("Win % = chance my team beats a random opponent in a weekly matchup if I take this player and "
+                    st.caption("Win % = chance my team beats a random opponent in a weekly matchup (averaged over all "
+                               f"{S.reg_season_weeks + S.playoff_weeks} weeks: {S.reg_season_weeks} regular-season + {S.playoff_weeks} playoff) "
+                               "if I take this player and "
                                "the rest of the draft plays out like the mock-draft model; category columns = chance to win each "
                                "category. Compare candidates by difference, not absolute level. Proj GP (mean) = expected games "
                                "played (of 82) for a player who is healthy at tip-off, including the chance of an in-season lost stretch; "
