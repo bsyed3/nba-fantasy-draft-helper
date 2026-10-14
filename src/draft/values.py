@@ -34,12 +34,21 @@ def _inputs(df: pd.DataFrame, fg_pool: float, ft_pool: float) -> pd.DataFrame:
     })
 
 
-def z_scores(df: pd.DataFrame, n_pool: int = 156, iters: int = 4) -> pd.DataFrame:
+Z_FLOOR = -3.0
+
+
+def z_scores(df: pd.DataFrame, n_pool: int = 156, iters: int = 4, floor: float | None = Z_FLOOR) -> pd.DataFrame:
     """
-    Returns a frame indexed like `df` with z_<cat> columns and z_total.
+    Returns a frame indexed like `df` with z_<cat> columns (raw), z_total and z_floor_adj.
     The mean/std reference pool is the top `n_pool` players by z_total,
     found iteratively (so the benchmark is "a drafted player", not the
     whole league including end-of-bench filler).
+
+    `floor`: when the nine z-scores are summed, no single category may subtract more than |floor| (default -3). In weekly head-to-head
+    a category is won or lost, so being 6 standard deviations bad at one (Giannis at free throws) costs the same one category as being
+    3 bad: a plain sum would bury such a player well below where the simulation, which counts category wins, values him. Only the
+    negative tail is floored; huge strengths still count in full. `z_floor_adj` is what the floor added back (0 for almost everyone);
+    pass floor=None for the plain sum.
     """
     d = df.copy()
     pool = d.sort_values("mpg", ascending=False).head(n_pool).index
@@ -51,8 +60,9 @@ def z_scores(df: pd.DataFrame, n_pool: int = 156, iters: int = 4) -> pd.DataFram
         mu, sd = x.loc[pool].mean(), x.loc[pool].std().replace(0, 1)
         z = (x - mu) / sd
         z["tov"] = -z["tov"]
-        z_total = z.sum(axis=1)
+        z_total = (z if floor is None else z.clip(lower=floor)).sum(axis=1)
         pool = z_total.sort_values(ascending=False).head(n_pool).index
     out = z.add_prefix("z_")
     out["z_total"] = z_total
+    out["z_floor_adj"] = z_total - z.sum(axis=1)
     return out

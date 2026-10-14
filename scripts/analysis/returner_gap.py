@@ -32,6 +32,8 @@ for T in range(first + 2, 2026):
     rows.append(w)
 d = pd.concat(rows, ignore_index=True)
 d["mp2"] = d["min_2"] / d["gp_2"]
+# the model's own availability target now ignores never-played seasons; this diagnostic wants them (a player who stayed out another year = 0)
+d["y_avail"] = np.where((d["gp_t"] > 0) | (d["last_year"] >= d["T"]), d["gp_t"] / d["sg_t"], np.nan)
 
 
 def returner_mask(w):

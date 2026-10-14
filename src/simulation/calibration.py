@@ -192,6 +192,10 @@ def weekly_game_structure(conn: sqlite3.Connection, seasons: list[str]) -> tuple
     played = box.merge(rot[["season", "player_id", "team_id"]], on=["season", "player_id", "team_id"])   # games with his final team
     pw = played.groupby(["season", "player_id", "week"]).size().rename("g").reset_index()
     full = rot.merge(team_week[team_week["G"] >= 2], on=["season", "team_id"])                            # every week of that team's season
+    # ... from his first appearance on: weeks missed before it were known at tip-off (the known-absences input), not injury runs
+    first_week = box.groupby(["season", "player_id"])["week"].min().rename("first_week").reset_index()
+    full = full.merge(first_week, on=["season", "player_id"])
+    full = full[full["week"] >= full["first_week"]]
     full = full.merge(pw, on=["season", "player_id", "week"], how="left")
     full["g"] = full["g"].fillna(0)
     missed = (full["G"] - full["g"]).clip(lower=0)

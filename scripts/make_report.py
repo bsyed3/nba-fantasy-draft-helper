@@ -30,6 +30,7 @@ from src.draft.state import DraftState, LeagueSettings
 from src.draft.values import CAT_LABELS, CATEGORIES, z_scores
 from src.features.player_seasons import STAT_DEFS, league_priors, load_player_season_table
 from src.features.positions import add_eligibility
+from src.features.team_context import team_context
 from src.models import projection as P
 from src.reporting import analysis as A
 from src.reporting import figs as F
@@ -785,8 +786,9 @@ def sim_calibration(conn, st_all, players, cal, year=2025, sims_per_week=80, top
     """Full-stack out-of-sample check: project `year` from earlier data only, simulate its real weeks, compare to reality."""
     season = f"{year}-{str(year + 1)[-2:]}"
     st = st_all[st_all["year"] < year]
-    bt = P.backtest(st, folds=list(range(year - 3, year)), verbose=False)
-    pj = P.project_season(st, players, year, bt.selection)
+    ctx = team_context(conn, list(range(int(st_all["year"].min()) + 1, year + 1)))      # team context, as in the shipped model
+    bt = P.backtest(st, folds=list(range(year - 3, year)), verbose=False, context=ctx)
+    pj = P.project_season(st, players, year, bt.selection, context=ctx)
     pj["team_id"] = pj["player_id"].map(team_at_season_start(conn, season))
     pj = add_eligibility(pj)
     pj = pd.concat([pj, z_scores(pj)], axis=1).sort_values("z_total", ascending=False).head(top_n).reset_index(drop=True)

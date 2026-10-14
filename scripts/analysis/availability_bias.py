@@ -2,6 +2,10 @@
 Is availability/minutes biased for 'usually healthy, one bad year' / 'recovered' / 'consistently healthy' groups?
 Selection-free (absent players count as 0 games). Also prints named players' histories and a leave-one-season-out test of a 'recovered' bump.
 
+NOTE: written for the earlier availability definition (games / ALL team games, never-played seasons = 0). The model's target is now
+games after the player's first appearance (opening absences are a separate input), so `y_avail` here no longer includes players who never
+played and its numbers differ from docs/HANDOFF.md 6.1's older figures -- use scripts/analysis/availability_calibration.py for current results.
+
 Diagnostic script (not part of the pipeline). Run from anywhere:  python scripts/analysis/availability_bias.py
 Needs data/processed/{nba.db, projections_2026.parquet, backtest_oos.parquet, backtest_summary.csv} (see docs/HANDOFF.md section 4).
 """

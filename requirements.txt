@@ -1,5 +1,8 @@
 # Data ingestion
 nba_api>=1.4
+requests>=2.31
+beautifulsoup4>=4.12    # ESPN injuries page (scripts/fetch_espn_injuries.py)
+lxml>=5.0
 
 # Core data science
 pandas>=2.2

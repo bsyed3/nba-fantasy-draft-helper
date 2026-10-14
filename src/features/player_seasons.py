@@ -35,12 +35,15 @@ STAT_DEFS: dict[str, tuple[str, str, float]] = {
     "p3": ("tpm", "fga3", 1.0),
     "ft": ("ftm", "fta", 1.0),
     "mpg": ("min", "gp", 1.0),
-    "avail": ("gp", "sg", 1.0),
+    # games played / team games from his FIRST appearance of the season on. Games missed before the first appearance
+    # (smiss: an injury or suspension that was known at tip-off) are excluded: they are not forecastable from stats, so
+    # they are supplied separately (data/external/known_absences.csv) instead of being learned as "good players sometimes play 0".
+    "avail": ("gp", "sgo", 1.0),
 }
 RATE_STATS = ["fga2", "fga3", "fta", "reb", "ast", "stl", "blk", "tov"]  # per-36
 PCT_STATS = ["p2", "p3", "ft"]
 ALL_STATS = RATE_STATS + PCT_STATS + ["mpg", "avail"]
-TOTAL_COLS = ["gp", "min", "sg", "fga2", "fga3", "fgm2", "tpm", "fta", "ftm",
+TOTAL_COLS = ["gp", "min", "sg", "sgo", "smiss", "fga2", "fga3", "fgm2", "tpm", "fta", "ftm",
               "reb", "ast", "stl", "blk", "tov"]
 
 
@@ -56,8 +59,34 @@ def pos_group(position_1: str | None) -> str:
     return c if c in "GFC" else "F"
 
 
+def opening_absences(conn: sqlite3.Connection) -> pd.DataFrame:
+    """
+    Per (season, player): `smiss` = games his team played before his first appearance of the regular season (injured /
+    suspended / not yet signed at tip-off), and `tg` = that team's regular-season games. Players with no appearance
+    have no row (they were out from game one).
+    """
+    first = pd.read_sql_query(
+        """
+        SELECT g.season, bs.player_id, bs.team_id, g.date
+        FROM box_score bs JOIN game g ON g.game_id = bs.game_id
+        WHERE g.game_type = 'regular' AND bs.min > 0
+        """,
+        conn,
+    ).sort_values("date").drop_duplicates(["season", "player_id"], keep="first")
+    games = pd.read_sql_query(
+        "SELECT season, date, home_team_id, away_team_id FROM game WHERE game_type = 'regular'", conn)
+    per_team = pd.concat([
+        games[["season", "date", "home_team_id"]].rename(columns={"home_team_id": "team_id"}),
+        games[["season", "date", "away_team_id"]].rename(columns={"away_team_id": "team_id"}),
+    ])
+    dates = {k: np.sort(v["date"].to_numpy()) for k, v in per_team.groupby(["season", "team_id"])}
+    first["smiss"] = [int(np.searchsorted(dates[(s, t)], d, side="left")) for s, t, d in zip(first["season"], first["team_id"], first["date"])]
+    first["tg"] = [len(dates[(s, t)]) for s, t in zip(first["season"], first["team_id"])]
+    return first[["season", "player_id", "smiss", "tg"]]
+
+
 def load_player_season_table(conn: sqlite3.Connection) -> pd.DataFrame:
-    """One row per (player_id, year) of regular-season totals + bio fields."""
+    """One row per (player_id, year) of regular-season totals + bio fields (+ opening-night absences `smiss`, games available `sgo`)."""
     totals = pd.read_sql_query(
         """
         SELECT g.season, bs.player_id,
@@ -93,9 +122,14 @@ def load_player_season_table(conn: sqlite3.Connection) -> pd.DataFrame:
 
     st = (
         totals.merge(team_games, on="season")
+        .merge(opening_absences(conn), on=["season", "player_id"], how="left")
         .merge(players, on="player_id", how="left")
         .merge(ages, on=["player_id", "season"], how="left")
     )
+    st["smiss"] = st["smiss"].fillna(0).astype(float)
+    # games he could have played once active; never below what he did play (mid-season trades blur the team-game count by a game or two)
+    st["sgo"] = np.maximum(st["tg"].fillna(st["sg"]) - st["smiss"], st["gp"]).astype(float)
+    st = st.drop(columns=["tg"])
     st["year"] = st["season"].map(season_start_year)
     st["pos"] = st["position_1"].map(pos_group)
     st["draft_pick"] = st["draft_position"].astype(float).fillna(61.0)

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMRegressor
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import QuantileRegressor, RidgeCV
 
 from src.features.player_seasons import (
     ALL_STATS, PCT_STATS, RATE_STATS, STAT_DEFS, TOTAL_COLS, league_priors,
@@ -49,6 +49,10 @@ K_GRID = [0, 50, 100, 250, 500, 1000, 2000, 4000]
 PCT_K_GRID = [0, 25, 50, 100, 200, 400, 800]
 MIN_EVAL_MINUTES = 500          # target-season minutes required to count in backtest metrics
 MIN_TRAIN_MINUTES = 100
+# Players with no season last year (a whole missed season, so lag 1 is empty): the Ridge/LightGBM availability models
+# learn from fringe players who vanish and come back and project returning rotation players too low (0.48 vs 0.60
+# actual, backtest 2021-25, n=17); the shrunken baseline overshoots (0.68). Their average matched (MSE 0.056 vs 0.070 raw).
+RETURNER_BASELINE_WEIGHT = 0.5
 DRAFT_TIERS = [(1, 5, "1-5"), (6, 14, "6-14"), (15, 30, "15-30"), (31, 60, "31-60"), (61, 999, "undrafted")]
 
 warnings.filterwarnings("ignore", message=".*X does not have valid feature names.*")
@@ -98,14 +102,17 @@ def blend(wide: pd.DataFrame, stat: str, decay: float, k: float) -> np.ndarray:
 # Wide (one row per player x target year) feature table
 # ---------------------------------------------------------------------------
 
-def build_wide(st: pd.DataFrame, priors: pd.DataFrame, target_year: int, season_games: dict[int, int]) -> pd.DataFrame:
+def build_wide(st: pd.DataFrame, priors: pd.DataFrame, target_year: int, season_games: dict[int, int],
+               context: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Rows: every player with at least one season in [T-3, T-1].
     Columns: lagged totals (`<col>_<lag>`), `prior_<stat>` (league ratio for
     the player's position group in season T-1), age/experience/draft
     features, and -- if season T exists in `st` -- targets `y_<stat>` with
-    weights `w_<stat>`. Players who were in the league at T (last_year >= T)
-    but logged no minutes get avail=0 (season-ending injuries must count).
+    weights `w_<stat>`. Availability is games played / team games after his
+    first appearance: games missed at the very start of a season (known
+    at tip-off) and seasons never played are not targets -- they come from
+    the known-absences input, not from the model.
     """
     T = target_year
     lag_frames = []
@@ -137,6 +144,9 @@ def build_wide(st: pd.DataFrame, priors: pd.DataFrame, target_year: int, season_
     )
     wide["sg_t"] = season_games.get(T, 82)
 
+    if context is not None:      # team context (src/features/team_context.py): vacated / incoming minutes and possessions, moved
+        wide = wide.merge(context[context["year"] == T].drop(columns="year"), on="player_id", how="left")
+
     for stat in ALL_STATS:
         pri = priors.loc[T - 1] if (T - 1) in priors.index.get_level_values(0) else priors.groupby(level=1).last()
         wide[f"prior_{stat}"] = wide["pos"].map(pri[stat])
@@ -146,17 +156,13 @@ def build_wide(st: pd.DataFrame, priors: pd.DataFrame, target_year: int, season_
         for stat, (num, den, scale) in STAT_DEFS.items():
             n = wide["player_id"].map(cur[num]) if num != "gp" else wide["player_id"].map(cur["gp"])
             d = wide["player_id"].map(cur[den]) if den != "sg" else wide["sg_t"]
-            if stat == "avail":
-                n = n.fillna(0.0)  # in the league (last_year >= T) but never played => 0 games
-                present = wide["player_id"].isin(cur.index) | (wide["last_year"] >= T)
-                wide[f"y_{stat}"] = np.where(present, n / d, np.nan)
-                wide[f"w_{stat}"] = np.where(present, d, 0.0)
-            else:
-                with np.errstate(invalid="ignore", divide="ignore"):
-                    wide[f"y_{stat}"] = n / d * scale
-                wide[f"w_{stat}"] = d.fillna(0.0)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                wide[f"y_{stat}"] = n / d * scale
+            wide[f"w_{stat}"] = d.fillna(0.0)
         wide["min_t"] = wide["player_id"].map(cur["min"]).fillna(0.0)
         wide["gp_t"] = wide["player_id"].map(cur["gp"]).fillna(0.0)
+        wide["smiss_t"] = wide["player_id"].map(cur["smiss"])        # games missed before his first appearance (NaN = never played)
+        wide["sgo_t"] = wide["player_id"].map(cur["sgo"])
     return wide
 
 
@@ -167,7 +173,8 @@ def feature_matrix(wide: pd.DataFrame, params: dict[str, tuple[float, float]]) -
         X[f"bl_{stat}"] = blend(wide, stat, *params[stat])
     for l in range(1, LAGS + 1):
         X[f"mpg_{l}"] = wide[f"min_{l}"] / wide[f"gp_{l}"]
-        X[f"avail_{l}"] = wide[f"gp_{l}"] / wide[f"sg_{l}"]
+        X[f"avail_{l}"] = wide[f"gp_{l}"] / wide[f"sgo_{l}"]                 # in-season availability (after his first appearance)
+        X[f"open_{l}"] = wide[f"smiss_{l}"] / wide[f"sg_{l}"]                # share of that season missed before his first game
         X[f"min_{l}"] = wide[f"min_{l}"]
     X["age"] = wide["age_t"]
     X["age2"] = wide["age_t"] ** 2
@@ -177,7 +184,33 @@ def feature_matrix(wide: pd.DataFrame, params: dict[str, tuple[float, float]]) -
     X["is_guard"] = (wide["pos"] == "G").astype(float)
     X["n_lags"] = wide["n_lags"]
     X["gap"] = wide["gap"]
+    if "ctx_vac_min" in wide.columns:        # team context, when supplied
+        for c in ("ctx_moved", "ctx_vac_min", "ctx_inc_min", "ctx_vac_poss", "ctx_inc_poss",
+                  "ctx_vac_min_pos", "ctx_inc_min_pos", "ctx_vac_poss_pos", "ctx_inc_poss_pos"):
+            X[c] = wide[c]
+        X["ctx_net_min"] = wide["ctx_vac_min"] - wide["ctx_inc_min"]
+        X["ctx_net_poss"] = wide["ctx_vac_poss"] - wide["ctx_inc_poss"]
+        X["ctx_net_min_pos"] = wide["ctx_vac_min_pos"] - wide["ctx_inc_min_pos"]
+        X["ctx_net_min_x_mpg"] = X["ctx_net_min_pos"] * X["mpg_1"].fillna(X["mpg_2"]).fillna(X["mpg_3"]) / 36.0   # a vacancy matters for rotation players
+        # stars absorb vacated shots, role players don't: scale the team's net vacated possessions by the player's own usage
+        gp = _latest(wide, "gp")
+        poss = (_latest(wide, "fga2") + _latest(wide, "fga3") + 0.44 * _latest(wide, "fta") + _latest(wide, "tov")) / gp   # possessions used per game, latest season
+        u = (poss / 15.0).fillna(0.0)
+        moved = wide["ctx_moved"].fillna(0.0)
+        X["ctx_net_poss_x_usage"] = X["ctx_net_poss"] * u
+        X["ctx_net_poss_pos_x_usage"] = (wide["ctx_vac_poss_pos"] - wide["ctx_inc_poss_pos"]) * u
+        X["ctx_moved_x_usage"] = moved * u
+        X["ctx_moved_x_netposs"] = moved * X["ctx_net_poss"]
+        X["usage_pg"] = poss
     return X
+
+
+def _latest(wide: pd.DataFrame, base: str) -> pd.Series:
+    """Most recent available lag of a total (`<base>_1`, else `_2`, else `_3`)."""
+    out = pd.Series(np.nan, index=wide.index)
+    for l in range(LAGS, 0, -1):
+        out = wide[f"{base}_{l}"].where(wide[f"{base}_{l}"].notna(), out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +292,12 @@ def predict_all(wide_train: pd.DataFrame, wide_test: pd.DataFrame, only_baseline
             for model in candidates_for(stat)[1:]:
                 r = _fit_predict(model, stat, X_tr_all[ok], resid, wt, X_te)
                 res[model] = _clip(stat, base_te + r)
+            if stat == "avail":
+                returner = (wide_test["gap"] > 0).to_numpy()
+                for model in res:
+                    if model != "baseline":
+                        res[model] = np.where(returner, RETURNER_BASELINE_WEIGHT * res["baseline"]
+                                              + (1 - RETURNER_BASELINE_WEIGHT) * res[model], res[model])
         out[stat] = res
     return out
 
@@ -299,6 +338,157 @@ class BacktestResult:
     summary: pd.DataFrame      # stat x model pooled errors, winner flagged
     selection: dict[str, str]  # stat -> winning model
     oos: pd.DataFrame          # selected-model out-of-sample per-game predictions + actuals
+    avail_eval: pd.DataFrame | None = None   # selection-free availability predictions vs actuals (absentees = 0), established players
+
+
+GP_QUANTILES = (0.25, 0.5, 0.75)
+
+
+def fit_gp_quantiles(avail_eval: pd.DataFrame, qs=GP_QUANTILES, min_mpg: float = 20.0) -> dict[float, tuple[float, float]]:
+    """
+    The projected availability is a MEAN, and games played are left-skewed (season-ending injuries), so a typical
+    player plays more than the mean says. Linear quantile fits of actual availability on projected availability
+    (rotation players, backtest folds, absentees counted as 0) turn the mean into a P25 / median / P75 range for display.
+    The draft engine keeps using the mean: the weekly simulation generates the injury runs itself.
+    """
+    d = avail_eval[(avail_eval["pred_mpg"] >= min_mpg) & avail_eval["act_avail"].notna()]
+    coefs = {}
+    for q in qs:
+        m = QuantileRegressor(quantile=q, alpha=0.0, solver="highs").fit(d[["pred_avail"]], d["act_avail"])
+        coefs[float(q)] = (float(m.intercept_), float(m.coef_[0]))
+    return coefs
+
+
+def apply_gp_quantiles(avail: np.ndarray | pd.Series, coefs: dict[float, tuple[float, float]], games: int = 82) -> pd.DataFrame:
+    """Games-played quantiles (out of `games`) for projected mean availability; ordered p25 <= median <= p75 and never below zero."""
+    a = np.asarray(avail, float)
+    cols = {}
+    prev = np.zeros_like(a)
+    for q in sorted(coefs):
+        b0, b1 = coefs[q]
+        prev = np.maximum(np.clip(b0 + b1 * a, 0.0, 1.0), prev)
+        cols[q] = prev * games
+    return pd.DataFrame({"gp_p25": cols[0.25], "gp_median": cols[0.5], "gp_p75": cols[0.75]},
+                        index=avail.index if isinstance(avail, pd.Series) else None)
+
+
+def drop_seasons(st: pd.DataFrame, ignore: pd.DataFrame | None) -> pd.DataFrame:
+    """
+    Treat chosen (player_id, year) seasons as if they never happened -- e.g. a season of rest while angling for a trade, which says
+    nothing about the player's health or role. The row is removed and the same player's EARLIER seasons slide forward one year (and
+    one year older), so the model reads his last real seasons as lags 1, 2, 3 instead of seeing a missed year (which it treats as an
+    injury). Use it for the history of the player being projected only, never for training targets.
+    """
+    if ignore is None or len(ignore) == 0:
+        return st
+    st = st.copy()
+    for pid, year in zip(ignore["player_id"], ignore["year"]):
+        drop = (st["player_id"] == pid) & (st["year"] == year)
+        if not drop.any():
+            continue
+        st = st[~drop].copy()
+        earlier = (st["player_id"] == pid) & (st["year"] < year)
+        st.loc[earlier, "year"] += 1
+        if "age" in st.columns:
+            st.loc[earlier, "age"] += 1
+    return st
+
+
+def sync_rates_from_per_game(proj: pd.DataFrame, idx) -> pd.DataFrame:
+    """
+    After hand-setting per-game values (mpg, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov) for the rows `idx`, bring the columns the
+    simulation reads (fga2, fga3, r_p2, r_p3, r_ft and the per-36 `r_*` rates) in step, so what is displayed is what is simulated.
+    """
+    for i in idx:
+        mpg, fga, tpa = proj.at[i, "mpg"], proj.at[i, "fga"], proj.at[i, "tpa"]
+        fga3, fga2 = tpa, max(fga - tpa, 0.0)
+        proj.at[i, "fga3"], proj.at[i, "fga2"] = fga3, fga2
+        if fga3 > 0:
+            proj.at[i, "r_p3"] = min(max(proj.at[i, "tpm"] / fga3, 0.0), 1.0)
+        if fga2 > 0:
+            proj.at[i, "r_p2"] = min(max((proj.at[i, "fgm"] - proj.at[i, "tpm"]) / fga2, 0.0), 1.0)
+        if proj.at[i, "fta"] > 0:
+            proj.at[i, "r_ft"] = min(max(proj.at[i, "ftm"] / proj.at[i, "fta"], 0.0), 1.0)
+        if mpg > 0:
+            for s in RATE_STATS:
+                proj.at[i, f"r_{s}"] = proj.at[i, s] / mpg * 36.0
+        proj.at[i, "r_mpg"], proj.at[i, "r_avail"] = mpg, proj.at[i, "avail"]
+    return proj
+
+
+def apply_external_rookies(proj: pd.DataFrame, ext: pd.DataFrame) -> pd.DataFrame:
+    """
+    Replace the draft-slot profile of rookies we have an outside projection for (columns name, pts, reb, ast, stl, blk, fg_pct, tp_pct, mpg;
+    anything missing keeps the model's value). Points, FG% and 3P% are matched exactly by solving for shot volume with the profile's own
+    shot mix (3PA share, FTA per FGA, FT%); free throws, turnovers and availability stay the draft-slot profile's. Only rows still on the
+    draft-tier path are touched, and every stat the simulation reads is rewritten consistently.
+    """
+    from src.features.names import normalize_name
+
+    proj = proj.copy()
+    keys = proj["name"].map(normalize_name)
+    n = 0
+    for _, r in ext.iterrows():
+        idx = proj.index[(keys == normalize_name(r["name"])) & (proj["source"] == "rookie_tier")]
+        if len(idx) != 1:
+            print(f"  external rookie projection skipped ({len(idx)} draft-tier rows match): {r['name']}")
+            continue
+        i = idx[0]
+        mpg = float(r["mpg"]) if pd.notna(r.get("mpg")) else float(proj.at[i, "mpg"])
+        fga0 = float(proj.at[i, "fga"])
+        s3, ratio, ft = proj.at[i, "fga3"] / fga0, proj.at[i, "fta"] / fga0, float(proj.at[i, "r_ft"])
+        fg = float(r["fg_pct"]) if pd.notna(r.get("fg_pct")) else float(proj.at[i, "fg_pct"])
+        p3 = float(r["tp_pct"]) if pd.notna(r.get("tp_pct")) else float(proj.at[i, "r_p3"])
+        fga = float(r["pts"]) / (2 * fg + s3 * p3 + ratio * ft)                      # PTS = FGA * (2 FG% + 3PA-share * 3P% + FTA/FGA * FT%)
+        fga3, fta = s3 * fga, ratio * fga
+        fga2 = fga - fga3
+        p2 = float(np.clip((fg * fga - p3 * fga3) / fga2, 0.30, 0.75))
+        rates = pd.DataFrame([{
+            "fga2": fga2 / mpg * 36, "fga3": fga3 / mpg * 36, "fta": fta / mpg * 36,
+            **{s: float(r[s]) / mpg * 36 for s in ("reb", "ast", "stl", "blk")}, "tov": float(proj.at[i, "r_tov"]),
+            "p2": p2, "p3": p3, "ft": ft, "mpg": mpg, "avail": float(proj.at[i, "avail"])}])
+        pg = to_per_game(rates).iloc[0]
+        for s in ALL_STATS:
+            proj.at[i, f"r_{s}"] = rates.iloc[0][s]
+        for c in ("fga2", "fga3", "fta", "reb", "ast", "stl", "blk", "tov", "fga", "tpa", "tpm", "fgm", "ftm", "pts", "fg_pct", "ft_pct", "mpg", "avail"):
+            proj.at[i, c] = pg[c]
+        proj.at[i, "source"] = "external_rookie"
+        n += 1
+    print(f"  applied {n} external rookie projections")
+    return proj
+
+
+def apply_known_absences(proj: pd.DataFrame, path, season_games: int = 82) -> pd.DataFrame:
+    """
+    Games a player is already known to miss at the START of the season (an injury or suspension known at draft time).
+    The model projects availability for a player who is active at tip-off (`avail_active`: games played / team games after his
+    first appearance); a known absence scales it: avail = avail_active * (82 - games_out) / 82. games_out = 82 means out for the
+    season. `path` is a CSV (or a list of CSVs, applied in order -- a later file wins for the same player, so a hand-edited file
+    can override the one generated from ESPN) with `player_id` or `name` and `games_out`; without any, everyone is assumed active.
+    """
+    from pathlib import Path
+
+    proj = proj.copy()
+    proj["avail_active"] = proj["avail"]
+    proj["games_out"] = 0.0
+    n = 0
+    for p in ([] if path is None else [path] if isinstance(path, (str, Path)) else list(path)):
+        if not Path(p).exists():
+            continue
+        ka = pd.read_csv(p)
+        key = "player_id" if "player_id" in ka.columns else "name"
+        lookup = proj[key].str.lower() if key == "name" else proj[key]
+        for _, row in ka.iterrows():
+            k = str(row[key]).lower() if key == "name" else row[key]
+            idx = proj.index[lookup == k]
+            if len(idx) != 1:
+                print(f"  known absence skipped (matched {len(idx)} players): {row[key]}")
+                continue
+            proj.loc[idx, "games_out"] = float(min(max(row["games_out"], 0), season_games))
+            n += 1
+    proj["avail"] = proj["avail_active"] * (season_games - proj["games_out"]) / season_games
+    print(f"  applied {n} known absences")
+    return proj
 
 
 def _pooled_summary(metrics: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -312,13 +502,13 @@ def _pooled_summary(metrics: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]
     return g.drop(columns=["sse", "sw"]), selection
 
 
-def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True) -> BacktestResult:
-    """Train on seasons < T, predict season T, for each T in `folds`."""
+def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True, context: pd.DataFrame | None = None) -> BacktestResult:
+    """Train on seasons < T, predict season T, for each T in `folds`. `context` = team-context features (optional)."""
     priors = league_priors(st)
     season_games = st.groupby("year")["sg"].first().to_dict()
     first_year = int(st["year"].min())
 
-    wides = {T: build_wide(st, priors, T, season_games) for T in range(first_year + 1, max(folds) + 1)}
+    wides = {T: build_wide(st, priors, T, season_games, context) for T in range(first_year + 1, max(folds) + 1)}
     metrics_rows = []
     fold_preds: dict[int, dict[str, dict[str, np.ndarray]]] = {}
     for T in folds:
@@ -329,7 +519,7 @@ def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True) -> Backte
         for stat in ALL_STATS:
             y = test[f"y_{stat}"].to_numpy(float)
             w = test[f"w_{stat}"].to_numpy(float)
-            # availability is judged on established players (>=500 min last year, absences count as 0);
+            # availability is judged on established players (>=500 min last year) who played that season (games after their first appearance);
             # everything else on players who logged >= 500 minutes in the target season
             relevant = (test["min_1"].fillna(0) >= MIN_EVAL_MINUTES) if stat == "avail" else (test["min_t"] >= MIN_EVAL_MINUTES)
             ok = np.isfinite(y) & (w > 0) & relevant.to_numpy()
@@ -367,7 +557,18 @@ def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True) -> Backte
         oos_parts.append(pg)
     oos = pd.concat(oos_parts, ignore_index=True).merge(act, on=["player_id", "year"], how="inner")
     oos = oos[oos["min"] >= MIN_EVAL_MINUTES].reset_index(drop=True)
-    return BacktestResult(metrics, summary, selection, oos)
+
+    # availability predictions vs actuals for established players, WITHOUT conditioning on the target season (absentees = 0)
+    ev = []
+    for T in folds:
+        test = wides[T]
+        ok = (test["min_1"].fillna(0) >= MIN_EVAL_MINUTES) & test["y_avail"].notna() & (test["w_avail"] > 0)
+        ev.append(pd.DataFrame({"year": T, "player_id": test.loc[ok, "player_id"].to_numpy(),
+                                "pred_avail": fold_preds[T]["avail"][selection["avail"]][ok.to_numpy()],
+                                "pred_mpg": fold_preds[T]["mpg"][selection["mpg"]][ok.to_numpy()],
+                                "act_avail": test.loc[ok, "y_avail"].to_numpy(),
+                                "act_gp": test.loc[ok, "gp_t"].to_numpy(), "act_smiss": test.loc[ok, "smiss_t"].to_numpy()}))
+    return BacktestResult(metrics, summary, selection, oos, pd.concat(ev, ignore_index=True))
 
 
 # ---------------------------------------------------------------------------
@@ -412,13 +613,18 @@ def rookie_profiles(st: pd.DataFrame, min_minutes: float = 200) -> tuple[pd.Data
 # Final projection
 # ---------------------------------------------------------------------------
 
-def project_season(st: pd.DataFrame, players: pd.DataFrame, target_year: int, selection: dict[str, str]) -> pd.DataFrame:
+def project_season(st: pd.DataFrame, players: pd.DataFrame, target_year: int, selection: dict[str, str],
+                   context: pd.DataFrame | None = None, ignore_seasons: pd.DataFrame | None = None,
+                   no_context_ids: set[int] | None = None) -> pd.DataFrame:
     """
     Per-game projections for `target_year` for every player with
     last_year >= target_year. Model path: players with NBA history in the
     last three seasons. Rookie path: everyone else, by draft tier.
     `players` needs [player_id, name, position_1, draft_year, draft_position,
-    rookie_year, last_year].
+    rookie_year, last_year]. `context` = team-context features (must match
+    what the selection was backtested with). `ignore_seasons` = (player_id, year) seasons to treat as if they never happened for the
+    PROJECTED players' histories (see drop_seasons); training data is left alone. `no_context_ids` = players whose projection should NOT
+    use team context (a judgment that the team change shouldn't matter for him): their rows come from a context-free run of the same models.
     """
     from src.features.player_seasons import pos_group
 
@@ -426,9 +632,9 @@ def project_season(st: pd.DataFrame, players: pd.DataFrame, target_year: int, se
     season_games = st.groupby("year")["sg"].first().to_dict()
     first_year = int(st["year"].min())
     train = pd.concat(
-        [build_wide(st, priors, t, season_games) for t in range(first_year + 1, target_year)], ignore_index=True
+        [build_wide(st, priors, t, season_games, context) for t in range(first_year + 1, target_year)], ignore_index=True
     )
-    test = build_wide(st, priors, target_year, season_games)
+    test = build_wide(drop_seasons(st, ignore_seasons), priors, target_year, season_games, context)
     test = test[test["player_id"].isin(players.loc[players["last_year"] >= target_year, "player_id"])].copy()
     preds = predict_all(train, test)
     rates = pd.DataFrame({s_: preds[s_][selection.get(s_, "baseline")] for s_ in ALL_STATS}, index=test.index)
@@ -458,4 +664,10 @@ def project_season(st: pd.DataFrame, players: pd.DataFrame, target_year: int, se
     out = out.merge(players[["player_id", "name", "position_1", "position_2"]], on="player_id", how="left")
     out["tier"] = out["draft_pick"].map(draft_tier)
     out["year"] = target_year
+    if no_context_ids and context is not None:
+        alt = project_season(st, players, target_year, selection, context=None, ignore_seasons=ignore_seasons).set_index("player_id")
+        swap = out["player_id"].isin(no_context_ids) & (out["source"] == "model") & out["player_id"].isin(alt.index)
+        cols = [c for c in out.columns if c.startswith("r_")] + ["fga2", "fga3", "fta", "reb", "ast", "stl", "blk", "tov", "fga", "tpa", "tpm", "fgm",
+                                                              "ftm", "pts", "fg_pct", "ft_pct", "mpg", "avail"]
+        out.loc[swap, cols] = alt.loc[out.loc[swap, "player_id"].to_numpy(), cols].to_numpy()
     return out
