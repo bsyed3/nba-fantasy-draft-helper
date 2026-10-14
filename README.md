@@ -86,6 +86,19 @@ Everything lives in one SQLite file (`data/processed/nba.db`, committed so a fre
 notes in `docs/data_model.md`. Box-score completeness was checked on ingest: ≈99% of team-games sum to
 240 (+5/OT) minutes.
 
+**Team context:** the projection also knows who left and joined each player's team (vacated / incoming minutes and possessions, from last season's box scores and
+today's rosters, with long-term injuries feeding teammates' minutes) -- it mainly sharpens projections for players who changed teams. `build_projections.py --no-team-context`
+turns it off. See `src/features/team_context.py` and docs/HANDOFF.md section 6.1.
+
+**Known absences (do this before the draft, and again as news breaks):** availability is modelled as games played / team games *after a player's first
+appearance*, i.e. it assumes he is healthy at tip-off. Games missed at the very start (an Achilles tear, an injury in camp) are not forecastable from box
+scores, so they come from `data/external/known_absences.csv` (`player_id` or `name`, `games_out`; 82 = out for the season; see `known_absences.example.csv`).
+`python scripts/fetch_espn_injuries.py` fills it from [ESPN's injuries page](https://www.espn.com/nba/injuries) -- every player labelled **Out**, with the estimated
+return date converted to games missed using the 2026-27 schedule (use `--html saved_page.html` if your network can't reach ESPN from Python, `--status Out "Day-To-Day"`
+to include day-to-day listings) -- then re-run `build_projections.py` + `build_library.py`. That file is regenerated on every run, so put your own judgments
+in `data/external/known_absences_manual.csv` (same columns; applied after the ESPN file, so it wins, and never overwritten). Without either, everyone is
+projected as active on opening night. `python scripts/export_projections.py` writes every player's projected stats to one Excel workbook.
+
 Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id` or `name`, plus any of
 `mpg, avail, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov` per game) next to the DB and
 `build_projections.py` will apply them — e.g. to anchor a rookie to a source you trust.
@@ -94,7 +107,9 @@ Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id
 
 `scripts/validate_draft.py` replays past seasons end-to-end using only information available before
 each season: project → simulate → mock-draft (engine vs "best available") → score the final rosters on
-that season's **actual day-by-day box scores**. `scripts/build_projections.py` also prints the projection backtest
+that season's **actual day-by-day box scores**. `--arms adaptive` adds the category-aware policy
+(`src/draft/policy.py`: each pick takes the candidate that best raises P(win ≥5 of 9 categories) for the roster it
+builds; `scripts/analysis/adaptive_policy_test.py` compares it with board order on paired mock drafts). `scripts/build_projections.py` also prints the projection backtest
 (out-of-sample error per stat vs the shrunken-average baseline) and saves it to `data/processed/backtest_summary.csv`.
 
 **[`docs/REPORT.md`](docs/REPORT.md)** (also `docs/REPORT.html`, self-contained with embedded figures) is the complete
@@ -118,7 +133,7 @@ src/
   features/                 per-player-season table, shrinkage definitions, stints
   models/projection.py      Phase 1
   simulation/               calibration.py (learn from history), copula.py (simulate)
-  draft/                    state.py, store.py (persistence), values.py (z-board), engine.py, mock.py
+  draft/                    state.py, store.py (persistence), values.py (z-board), engine.py, policy.py (category-aware picks), mock.py
   app/streamlit_app.py      live draft UI
 tests/                      pytest; synthetic data, no network needed
 docs/                       data model, methodology, validation, original investigation plan
