@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from src.draft import store
-from src.draft.engine import DraftEngine
+from src.draft.engine import DEFAULT_PICK_MARGIN, DraftEngine, recommended_pick
 from src.draft.state import DraftState, LeagueSettings
 from src.draft.values import CAT_LABELS, CATEGORIES
 from src.simulation.copula import Library
@@ -31,7 +31,7 @@ from src.simulation.copula import Library
 DATA = ROOT / "data" / "processed"
 DB_PATH = Path(os.environ.get("NBA_DB", DATA / "nba.db"))  # override to keep test drafts out of the real DB
 PER_GAME_COLS = ["mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
-COL_LABELS = {"name": "Player", "pos": "Pos", "team": "Team", "age_t": "Age", "espn_adp": "ESPN ADP", "gp82": "Proj GP",
+COL_LABELS = {"name": "Player", "pos": "Pos", "team": "Team", "age_t": "Age", "espn_adp": "ESPN ADP", "gp82": "Proj GP (mean)", "gp_med": "Typical GP (median)", "gp_rng": "GP range (P25–P75)",
               "rank": "Board rank", "pg_rank": "Per-game rank", "mpg": "MPG", "pts": "PPG", "tpm": "3PM", "reb": "REB",
               "ast": "AST", "stl": "STL", "blk": "BLK", "fg_pct": "FG%", "ft_pct": "FT%", "tov": "TO", "z_total": "Value"}
 
@@ -62,7 +62,12 @@ def load_data():
     proj["pos"] = proj["elig"]
     proj = proj[proj["player_id"].isin(lib.player_ids)].reset_index(drop=True)
     from src.draft.values import z_scores
-    proj["gp82"] = (proj["avail"] * 82).round(0)                                   # projected games played over an 82-game season
+    proj["gp82"] = (proj["avail"] * 82).round(0)                                   # projected (mean) games played over an 82-game season
+    if "gp_median" in proj:                                                        # typical (median) games and the P25-P75 range: display only
+        proj["gp_med"] = proj["gp_median"].round(0)
+        proj["gp_rng"] = proj["gp_p25"].round(0).astype(int).astype(str) + "–" + proj["gp_p75"].round(0).astype(int).astype(str)
+    else:
+        proj["gp_med"], proj["gp_rng"] = float("nan"), ""
     proj["pg_rank"] = (z_scores(proj.assign(avail=1.0))["z_total"].rank(ascending=False, method="first")
                        .astype(int).to_numpy())                                     # value rank ignoring availability
     return proj, lib, year
@@ -75,9 +80,9 @@ def get_engine(_proj, _lib, settings: LeagueSettings) -> DraftEngine:
 
 @st.cache_data(show_spinner="Simulating the rest of the draft...")
 def cached_recommend(_engine: DraftEngine, settings: LeagueSettings, picks: tuple, excluded: tuple,
-                     top_k: int, rollouts: int, extra: tuple = ()) -> pd.DataFrame:
+                     max_rank: int, rollouts: int, extra: tuple = ()) -> pd.DataFrame:
     state = DraftState(settings, list(picks), set(excluded), set(_engine.center_ids))
-    return _engine.recommend(state, top_k=top_k, rollouts=rollouts, pergame_k=10, extra_candidates=list(extra))
+    return _engine.recommend(state, rollouts=rollouts, pergame_k=10, extra_candidates=list(extra), max_rank=max_rank)
 
 
 @st.cache_data(show_spinner="Projecting every team...")
@@ -96,8 +101,8 @@ def label(row) -> str:
 
 def roster_frame(proj_by_id: pd.DataFrame, ids: list[int]) -> pd.DataFrame:
     if not ids:
-        return pd.DataFrame(columns=["name", "pos", "team", "gp82"] + PER_GAME_COLS).rename(columns=COL_LABELS)
-    out = proj_by_id.loc[ids, ["name", "pos", "team", "gp82"] + PER_GAME_COLS].copy()
+        return pd.DataFrame(columns=["name", "pos", "team", "gp82", "gp_med"] + PER_GAME_COLS).rename(columns=COL_LABELS)
+    out = proj_by_id.loc[ids, ["name", "pos", "team", "gp82", "gp_med"] + PER_GAME_COLS].copy()
     out[["fg_pct", "ft_pct"]] *= 100
     return out.round(1).reset_index(drop=True).rename(columns=COL_LABELS)
 
@@ -158,7 +163,9 @@ with st.sidebar.expander("League settings", expanded=False):
              f"max {S.max_centers} centers · snake")
     st.write(f"{S.reg_season_weeks} regular-season weeks + {S.playoff_weeks} playoff weeks")
 
-top_k = st.sidebar.slider("Candidates to evaluate", 10, 60, 30, 5)
+max_rank = st.sidebar.slider("Evaluate every player up to board rank", 30, 300, 200, 10,
+                             help="Every player still available whose board rank is within this cap is simulated as my pick "
+                                  "(about 3-4 seconds at 200).")
 rollouts = st.sidebar.slider("Mock-draft rollouts per candidate", 1, 6, 2)
 _label2id = {f"{r['name']} (board #{int(r['rank'])})": int(r["player_id"]) for _, r in proj.sort_values("rank").iterrows()}
 _picked = st.sidebar.multiselect(
@@ -224,15 +231,21 @@ with tab_draft:
         else:
             plan = state.my_turn or st.toggle("Plan my next pick (simulate bots up to it)", value=False)
             if plan:
-                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), top_k, rollouts, tuple(sorted(watch)))
+                rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), max_rank, rollouts, tuple(sorted(watch)))
                 if rec.empty:
                     st.write("Nothing to evaluate.")
                 else:
-                    best = rec.iloc[0]
+                    best = recommended_pick(rec)
                     st.markdown(f"**Best pick: {best['name']}** — {best['win_prob']:.1%} chance to win a weekly matchup "
                                 f"(≈ {best['exp_wins']:.1f} wins over {S.reg_season_weeks} weeks). "
-                                f"Board rank #{int(best['static_rank'])}, per-game rank #{int(best['pergame_rank'])}.")
-                    stat_cols = ["gp82", "mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
+                                f"Board rank #{int(best['static_rank'])}, per-game rank #{int(best['pergame_rank'])}. "
+                                f"{len(rec)} players simulated.")
+                    top = rec.iloc[0]
+                    if top["player_id"] != best["player_id"]:
+                        st.caption(f"Highest simulated number: {top['name']} ({top['win_prob']:.1%}). It is within "
+                                   f"{DEFAULT_PICK_MARGIN:.0%} of {best['name']}, so the board-ranked player is recommended: "
+                                   f"with this many candidates, differences that small are mostly simulation noise.")
+                    stat_cols = ["gp82", "gp_med", "gp_rng", "mpg", "pts", "tpm", "reb", "ast", "stl", "blk", "fg_pct", "ft_pct", "tov"]
                     info = proj_by_id.loc[rec["player_id"], stat_cols].reset_index(drop=True)
                     info[["fg_pct", "ft_pct"]] *= 100
                     cat_cols_ = [f"cat_{c}" for c in CATEGORIES]
@@ -246,16 +259,19 @@ with tab_draft:
                     st.dataframe(
                         show, hide_index=True, width="stretch", height=620,
                         column_config={"Win %": one(format="%.1f%%"), "vs top-ranked": one(format="%+.1f%%"),
-                                       "Proj GP": one(format="%.0f"), "MPG": one(format="%.1f"), "PPG": one(format="%.1f"),
+                                       "Proj GP (mean)": one(format="%.0f"), "Typical GP (median)": one(format="%.0f"), "MPG": one(format="%.1f"), "PPG": one(format="%.1f"),
                                        "3PM": one(format="%.1f"), "REB": one(format="%.1f"), "AST": one(format="%.1f"),
                                        "STL": one(format="%.1f"), "BLK": one(format="%.1f"), "TO": one(format="%.1f"),
                                        "FG%": one(format="%.1f%%"), "FT%": one(format="%.1f%%"), **cat_columns()},
                     )
                     st.caption("Win % = chance my team beats a random opponent in a weekly matchup if I take this player and "
                                "the rest of the draft plays out like the mock-draft model; category columns = chance to win each "
-                               "category. Compare candidates by difference, not absolute level. Proj GP = projected games played "
-                               "(of 82); MPG/PPG/etc. are per-game averages when he plays. Board rank discounts counting stats by "
-                               "projected games; per-game rank ignores availability. The pool includes the top per-game players "
+                               "category. Compare candidates by difference, not absolute level. Proj GP (mean) = expected games "
+                               "played (of 82) for a player who is healthy at tip-off, including the chance of an in-season lost stretch; "
+                               "players already known to be out at the start are set in data/external/known_absences.csv; Typical GP (median) and the P25–P75 range "
+                               "show what a player like him usually plays (the median is higher because season-ending injuries skew "
+                               "the average down; display only). MPG/PPG/etc. are per-game averages when he plays. Board rank "
+                               "discounts counting stats by projected (mean) games; per-game rank ignores availability. The pool includes the top per-game players "
                                "even if the availability-discounted board ranks them low.")
             else:
                 st.info("Not your turn yet. Enter picks as they happen, or flip the toggle to plan ahead.")
@@ -307,7 +323,7 @@ with tab_board:
         b = b[b["name"].str.contains(q, case=False, na=False)]
     if pos:
         b = b[b["position_1"].isin(pos)]
-    cols = ["rank", "pg_rank", "name", "pos", "team", "age_t", "espn_adp", "gp82"] + PER_GAME_COLS + ["z_total"]
+    cols = ["rank", "pg_rank", "name", "pos", "team", "age_t", "espn_adp", "gp82", "gp_med", "gp_rng"] + PER_GAME_COLS + ["z_total"]
     bb = b[cols].copy()
     bb[["fg_pct", "ft_pct"]] *= 100
     st.dataframe(bb.round(1).rename(columns=COL_LABELS), hide_index=True, width="stretch", height=560)

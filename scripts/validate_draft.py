@@ -32,10 +32,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from src.draft.engine import DraftEngine
 from src.draft.mock import best_available, engine_pick, run_mock_draft
+from src.draft.policy import AdaptivePolicy, adaptive_pick
 from src.draft.state import LeagueSettings
 from src.draft.values import z_scores
 from src.features.player_seasons import load_player_season_table
 from src.features.positions import add_eligibility
+from src.features.team_context import team_context
 from src.models import projection as P
 from src.simulation.calibration import Calibration
 from src.simulation.copula import build_library
@@ -51,11 +53,12 @@ def team_at_season_start(conn, season: str) -> pd.Series:
 
 
 def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per_week: int, settings_kw: dict, top_k: int, rollouts: int,
-                  margin: float = 0.0):
+                  margin: float = 0.0, arms: tuple = ("engine", "static"), adaptive_kw: dict | None = None):
     season = f"{year}-{str(year + 1)[-2:]}"
     st = st_all[st_all["year"] < year]
-    bt = P.backtest(st, folds=list(range(year - 3, year)), verbose=False)
-    proj = P.project_season(st, players, year, bt.selection)
+    ctx = team_context(conn, list(range(int(st_all["year"].min()) + 1, year + 1)))      # team context, as in the shipped model
+    bt = P.backtest(st, folds=list(range(year - 3, year)), verbose=False, context=ctx)
+    proj = P.project_season(st, players, year, bt.selection, context=ctx)
     proj["team_id"] = proj["player_id"].map(team_at_season_start(conn, season))
     proj = add_eligibility(proj)  # heuristic eligibility for every strategy alike
     proj = pd.concat([proj, z_scores(proj)], axis=1)
@@ -69,19 +72,20 @@ def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per
         s = LeagueSettings(my_slot=slot, season=season, **settings_kw)
         eng = DraftEngine(lib, proj, s, seed=d)
         truth = DraftEngine(actual, proj, s)
-        res = {}
-        for name, strat in (("engine", engine_pick(top_k, rollouts, margin)), ("static", best_available)):
-            rosters = run_mock_draft(eng, s, strat, bot_seed=1000 * year + d)
-            sim_ev = eng.evaluate(rosters)          # what the model believed
-            real_ev = truth.evaluate(rosters)       # what actually happened
-            res[name] = (sim_ev.win_prob[slot - 1], real_ev.win_prob[slot - 1])
-        rows.append(dict(year=year, draft=d, slot=slot, sim_engine=res["engine"][0], sim_static=res["static"][0],
-                         real_engine=res["engine"][1], real_static=res["static"][1]))
-        print(f"  {season} draft {d + 1}/{n_drafts} slot {slot}: real win% engine {res['engine'][1]:.3f} vs static {res['static'][1]:.3f}")
+        strategies = {"engine": lambda: engine_pick(top_k, rollouts, margin), "static": lambda: best_available,
+                      "adaptive": lambda: adaptive_pick(AdaptivePolicy(eng, **(adaptive_kw or {})))}
+        row = dict(year=year, draft=d, slot=slot)
+        for name in arms:
+            rosters = run_mock_draft(eng, s, strategies[name](), bot_seed=1000 * year + d)
+            row[f"sim_{name}"] = eng.evaluate(rosters).win_prob[slot - 1]      # what the model believed
+            row[f"real_{name}"] = truth.evaluate(rosters).win_prob[slot - 1]   # what actually happened
+        rows.append(row)
+        print(f"  {season} draft {d + 1}/{n_drafts} slot {slot}: real win% " + ", ".join(f"{a} {row[f'real_{a}']:.3f}" for a in arms))
     return pd.DataFrame(rows)
 
 
-def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, tag=""):
+def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, tag="", arms=("engine", "static"), adaptive_kw=None):
+    arms = tuple(dict.fromkeys(("static",) + tuple(arms)))      # "static" (best available by the board) is always the baseline
     out = Path(out_dir)
     conn = sqlite3.connect(out / "nba.db")
     st_all = load_player_season_table(conn)
@@ -89,21 +93,28 @@ def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, t
         "SELECT player_id, name, position_1, position_2, draft_year, draft_position, rookie_year, last_year FROM player", conn)
     cal = Calibration.load(out / "calibration.json")
     kw = dict(n_teams=10, roster_size=13, active_slots=10, max_centers=3)
-    frames = [validate_year(conn, st_all, players, cal, y, n_drafts, sims_per_week, kw, top_k, rollouts, margin) for y in years]
+    frames = [validate_year(conn, st_all, players, cal, y, n_drafts, sims_per_week, kw, top_k, rollouts, margin, arms, adaptive_kw) for y in years]
     res = pd.concat(frames, ignore_index=True)
-    res["gain_sim"] = res["sim_engine"] - res["sim_static"]
-    res["gain_real"] = res["real_engine"] - res["real_static"]
+    if "engine" in arms:                                       # column names the report script reads
+        res["gain_sim"] = res["sim_engine"] - res["sim_static"]
+        res["gain_real"] = res["real_engine"] - res["real_static"]
+    for a in arms:
+        if a not in ("static", "engine"):
+            res[f"gain_sim_{a}"] = res[f"sim_{a}"] - res["sim_static"]
+            res[f"gain_real_{a}"] = res[f"real_{a}"] - res["real_static"]
     res.to_csv(out / (("validation_results" if margin == 0 else f"validation_results_margin{margin:g}") + tag + ".csv"), index=False)
 
     def summ(g):
         n = len(g)
-        return pd.Series({
-            "drafts": n,
-            "real_win_engine": g["real_engine"].mean(), "real_win_static": g["real_static"].mean(),
-            "real_gain": g["gain_real"].mean(), "real_gain_se": g["gain_real"].std(ddof=1) / np.sqrt(n),
-            "engine_wins_pct": (g["gain_real"] > 0).mean(),
-            "sim_gain": g["gain_sim"].mean(),
-        })
+        row = {"drafts": n, "real_win_static": g["real_static"].mean()}
+        for a in arms:
+            if a == "static":
+                continue
+            d_real, d_sim = g[f"real_{a}"] - g["real_static"], g[f"sim_{a}"] - g["sim_static"]
+            row.update({f"real_win_{a}": g[f"real_{a}"].mean(), f"real_gain_{a}": d_real.mean(),
+                        f"real_gain_se_{a}": d_real.std(ddof=1) / np.sqrt(n) if n > 1 else float("nan"),
+                        f"{a}_wins_pct": (d_real > 0).mean(), f"sim_gain_{a}": d_sim.mean()})
+        return pd.Series(row)
     table = res.groupby("year").apply(summ, include_groups=False)
     table.loc["ALL"] = summ(res)
     print("\nActual-weekly-results validation (weekly matchup win probability):")
@@ -122,5 +133,11 @@ if __name__ == "__main__":
     ap.add_argument("--margin", type=float, default=0.0,
                     help="engine only overrides the value ranking when ahead by more than this win-probability margin (e.g. 0.01)")
     ap.add_argument("--tag", default="", help="suffix for the results file (lets seasons run as parallel processes)")
+    ap.add_argument("--arms", nargs="+", default=["engine", "static"], choices=["engine", "static", "adaptive"],
+                    help="ways to draft my team with the same bots; 'static' is always included as the baseline "
+                         "('adaptive' = the category-aware policy of src/draft/policy.py; skipping 'engine' makes a run much faster)")
+    ap.add_argument("--adaptive-candidates", type=int, default=None)
+    ap.add_argument("--adaptive-margin", type=float, default=None)
     a = ap.parse_args()
-    main(a.years, a.drafts, a.sims, a.top_k, a.rollouts, a.out_dir, a.margin, a.tag)
+    akw = {k: v for k, v in (("n_candidates", a.adaptive_candidates), ("margin", a.adaptive_margin)) if v is not None}
+    main(a.years, a.drafts, a.sims, a.top_k, a.rollouts, a.out_dir, a.margin, a.tag, tuple(a.arms), akw)

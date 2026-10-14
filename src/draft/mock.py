@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from src.draft.engine import DraftEngine
+from src.draft.engine import DraftEngine, recommended_pick
 from src.draft.state import DraftState, LeagueSettings
 
 Strategy = Callable[[DraftEngine, DraftState], int]  # returns a player_id
@@ -27,17 +27,17 @@ def best_available(engine: DraftEngine, state: DraftState) -> int:
     return int(engine.pid[next(i for i in engine.static_order if not taken[i] and not (full_c and engine.is_center[i]))])
 
 
-def engine_pick(top_k: int = 20, rollouts: int = 2, margin: float = 0.0) -> Strategy:
+def engine_pick(top_k: int = 20, rollouts: int = 2, margin: float = 0.0, max_rank: int | None = None) -> Strategy:
     """
     Take the engine's best candidate. With margin > 0 the engine only overrides the value ranking when it
     is ahead by more than `margin` (win-probability units): among candidates within `margin` of the best,
     take the one with the best static value rank. That guards against picking the argmax of noisy near-ties.
+    With `max_rank`, every player left within that board rank is a candidate (instead of the best `top_k`).
     """
     def pick(engine: DraftEngine, state: DraftState) -> int:
-        rec = engine.recommend(state, top_k=top_k, rollouts=rollouts)
+        rec = engine.recommend(state, top_k=top_k, rollouts=rollouts, max_rank=max_rank)
         if margin > 0:
-            close = rec[rec["win_prob"] >= rec["win_prob"].iloc[0] - margin]
-            return int(close.sort_values("static_rank").iloc[0]["player_id"])
+            return int(recommended_pick(rec, margin)["player_id"])
         return int(rec.iloc[0]["player_id"])
     return pick
 

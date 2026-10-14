@@ -43,6 +43,7 @@ from src.simulation.library import STAT_IDX, Library
 
 DEDICATED = ["C", "PG", "SG", "SF", "PF"]
 N_DEDICATED_AND_FLEX = 7  # PG SG SF PF C + G + F; the remaining active slots are UTIL
+TOTALS_CACHE_MAX = 3000   # memoised rosters (each ~30 KB)
 
 
 def category_matrix(totals: np.ndarray) -> np.ndarray:
@@ -94,6 +95,8 @@ class DraftEngine:
         self.is_center = self.proj["is_center"].to_numpy(bool)
         self.center_ids = {int(p) for p in self.pid[self.is_center]}
         self.n_util = max(settings.active_slots - N_DEDICATED_AND_FLEX, 0)
+        self.policy = None   # set to an src.draft.policy.AdaptivePolicy to make MY later picks in roll-outs category-aware
+        self._totals_cache: dict[tuple, np.ndarray] = {}
         elig = {s: self.proj[f"e_{s}"].to_numpy(bool) for s in DEDICATED}
         self.slot_order: list[list[str]] = []
         for i in range(len(self.pid)):
@@ -134,11 +137,20 @@ class DraftEngine:
     def _center_counts(self, rosters) -> list[int]:
         return [sum(self.is_center[i] for i in rosters[t]) for t in range(1, self.settings.n_teams + 1)]
 
-    def _advance(self, taken, rosters, ptr, orders, cc, start_pick: int, end_pick: int) -> None:
-        """Auto-draft picks [start_pick, end_pick] in place (respects the center cap)."""
+    def _advance(self, taken, rosters, ptr, orders, cc, start_pick: int, end_pick: int, plain: bool = False) -> None:
+        """
+        Auto-draft picks [start_pick, end_pick] in place (respects the center cap). My own picks follow the board
+        order, unless `self.policy` is set (a category-aware policy, see src.draft.policy) and `plain` is False.
+        """
         n, cap = self.settings.n_teams, self.settings.max_centers
         for pn in range(start_pick, end_pick + 1):
             t = team_for_pick(pn, n)
+            if self.policy is not None and not plain and t == self.settings.my_slot:
+                j = self.policy.pick(taken, rosters, ptr, orders, cc, pn)
+                taken[j] = True
+                rosters[t].append(j)
+                cc[t - 1] += int(self.is_center[j])
+                continue
             o, k = orders[t - 1], ptr[t - 1]
             while taken[o[k]] or (self.is_center[o[k]] and cc[t - 1] >= cap):
                 k += 1
@@ -151,8 +163,11 @@ class DraftEngine:
     # ------------------------------------------------------------------
     # evaluation
     # ------------------------------------------------------------------
-    def team_totals(self, roster: list[int]) -> np.ndarray:
-        """[S, 10] weekly category totals for a roster under daily lineups."""
+    def team_totals(self, roster: list[int], usage: dict | None = None) -> np.ndarray:
+        """
+        [S, 10] weekly category totals for a roster under daily lineups. If `usage` is given it is filled with
+        {player index: (player-days that got a slot, player-days with a game)} summed over all simulated weeks.
+        """
         stats, played = self.lib.stats, self.lib.played
         S, D = played.shape[1:]
         free = {s: np.ones((S, D), dtype=bool) for s in DEDICATED + ["G", "F"]}
@@ -170,6 +185,8 @@ class DraftEngine:
             take = m & ~got & (util_left > 0)
             util_left -= take
             got |= take
+            if usage is not None:
+                usage[i] = (float(got.sum()), float(m.sum()))
             total += np.einsum("sd,sdk->sk", got.astype(np.float32), stats[i].astype(np.float32))
         return total
 
@@ -195,9 +212,20 @@ class DraftEngine:
                 out.append({"day": d, "slot": slot or "BENCH", "idx": i})
         return out
 
+    def _cached_totals(self, roster: list[int]) -> np.ndarray:
+        """team_totals memoised by roster. Across the candidates of one recommendation almost every opponent's roster is
+        identical, so this makes evaluating ~200 candidates about as cheap as evaluating a handful. Output is unchanged."""
+        key = tuple(sorted(roster))
+        hit = self._totals_cache.get(key)
+        if hit is None:
+            if len(self._totals_cache) >= TOTALS_CACHE_MAX:
+                self._totals_cache.clear()
+            hit = self._totals_cache[key] = self.team_totals(roster)
+        return hit
+
     def evaluate(self, rosters: dict[int, list[int]]) -> TeamEval:
         T = self.settings.n_teams
-        totals = np.stack([self.team_totals(rosters[t]) for t in range(1, T + 1)])    # [T, S, 10]
+        totals = np.stack([self._cached_totals(rosters[t]) for t in range(1, T + 1)])    # [T, S, 10]
         cats = category_matrix(totals)                                                # [T, S, 9]
         lower = np.array([c == "tov" for c in CATEGORIES])
         a, b = cats[:, None], cats[None, :]                                            # team t vs team u
@@ -218,11 +246,13 @@ class DraftEngine:
         return np.flatnonzero(~taken)
 
     def recommend(self, state: DraftState, top_k: int = 25, rollouts: int = 2,
-                  extra_candidates: list[int] | None = None, pergame_k: int = 0) -> pd.DataFrame:
+                  extra_candidates: list[int] | None = None, pergame_k: int = 0, max_rank: int | None = None) -> pd.DataFrame:
         """
         Rank candidates for my next pick by simulated matchup win probability.
         If it is not my turn yet, the bots' picks up to my next pick are
         simulated first and candidates come from who is projected to be left.
+        Candidates are the `top_k` best-ranked players left, or -- with `max_rank` -- EVERY player left whose board rank
+        is within the first `max_rank` (so nobody a build might want is hidden by a short list).
         """
         my_pick = state.my_next_pick_no()
         if my_pick is None or state.done:
@@ -238,7 +268,9 @@ class DraftEngine:
             self._advance(taken, rosters, ptr, orders, cc, state.next_pick_no, my_pick - 1)
             if cand_list is None:  # rollout 0 defines the candidate pool
                 ok = lambda i: not taken[i] and not (self.is_center[i] and cc[me - 1] >= cap)
-                cand_list = [i for i in self.static_order if ok(i)][:top_k]
+                cand_list = [i for i in (self.static_order[:max_rank] if max_rank else self.static_order) if ok(i)]
+                if not max_rank:
+                    cand_list = cand_list[:top_k]
                 for i in [j for j in self.pergame_order if ok(j)][:pergame_k]:   # stars the availability-discounted board buries
                     if i not in cand_list:
                         cand_list.append(i)
@@ -284,6 +316,19 @@ class DraftEngine:
         ptr, cc = [0] * self.settings.n_teams, self._center_counts(rosters)
         self._advance(taken, rosters, ptr, orders, cc, state.next_pick_no, self.settings.total_picks)
         return self.evaluate(rosters), rosters
+
+
+DEFAULT_PICK_MARGIN = 0.01   # real-season validation (2022-25): margin 0.01 gained +0.025 over best-available, margin 0 lost -0.008
+
+
+def recommended_pick(rec: pd.DataFrame, margin: float = DEFAULT_PICK_MARGIN) -> pd.Series:
+    """
+    The pick to make from a `recommend` table: among the candidates within `margin` of the best simulated win probability,
+    the one the board ranks highest. With many candidates the single best simulated number is partly luck, so near-ties go to the
+    board rather than to whoever happened to top a noisy list.
+    """
+    close = rec[rec["win_prob"] >= rec["win_prob"].max() - margin]
+    return close.sort_values("static_rank").iloc[0]
 
 
 def cat_table(cat_win_prob: np.ndarray) -> pd.DataFrame:

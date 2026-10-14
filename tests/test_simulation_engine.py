@@ -212,3 +212,38 @@ def test_recommend_can_evaluate_low_board_players_and_reports_per_game_rank(cal,
     # per-game candidates are an opt-in widening of the pool and never remove anyone
     wide = eng.recommend(st, top_k=3, rollouts=1, pergame_k=5)
     assert set(eng.recommend(st, top_k=3, rollouts=1)["player_id"]) <= set(wide["player_id"])
+
+
+# ---------------------------------------------------------------------------
+# candidate pool by board rank, memoised roster totals, near-tie guard
+# ---------------------------------------------------------------------------
+def test_max_rank_evaluates_every_available_player_inside_the_cap_and_nobody_outside(cal, schedule):
+    eng, s, _ = small_engine(cal, schedule, my_slot=1)
+    st = DraftState(s, centers=set(eng.center_ids))
+    rec = eng.recommend(st, rollouts=1, max_rank=15)
+    ranks = set(rec["static_rank"])
+    assert ranks <= set(range(1, 16))                                  # nobody beyond the cap
+    assert len(rec) >= 12                                              # every player left in the cap, bar centers/bot-taken
+    assert len(eng.recommend(st, top_k=5, rollouts=1)) == 5            # without max_rank the short list is unchanged
+    far = int(eng.pid[eng.static_order[30]])
+    assert far in set(eng.recommend(st, rollouts=1, max_rank=15, extra_candidates=[far])["player_id"])   # explicit extras still added
+
+
+def test_memoised_totals_do_not_change_any_number(cal, schedule):
+    eng, s, _ = small_engine(cal, schedule, my_slot=2)
+    ros = [3, 7, 11, 20]
+    assert np.array_equal(eng._cached_totals(ros), eng.team_totals(ros))
+    assert np.array_equal(eng._cached_totals(list(reversed(ros))), eng.team_totals(ros))   # keyed by the set, not the order
+    st = DraftState(s, centers=set(eng.center_ids))
+    warm = eng.recommend(st, rollouts=2, max_rank=20)
+    eng._totals_cache.clear()
+    pd.testing.assert_frame_equal(warm, eng.recommend(st, rollouts=2, max_rank=20))
+
+
+def test_recommended_pick_gives_near_ties_to_the_board_and_clear_wins_to_the_engine():
+    from src.draft.engine import recommended_pick
+    rec = pd.DataFrame({"player_id": [1, 2, 3], "static_rank": [9, 2, 1], "win_prob": [0.60, 0.595, 0.50]})
+    assert recommended_pick(rec, margin=0.01)["player_id"] == 2        # 1 and 2 are a near-tie: the better-ranked one wins
+    assert recommended_pick(rec, margin=0.0)["player_id"] == 1         # no guard: the simulated best
+    clear = pd.DataFrame({"player_id": [1, 2], "static_rank": [9, 1], "win_prob": [0.60, 0.55]})
+    assert recommended_pick(clear, margin=0.01)["player_id"] == 1      # a 5-point gap is not a tie
