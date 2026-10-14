@@ -52,8 +52,8 @@ def team_at_season_start(conn, season: str) -> pd.Series:
     return df.sort_values("date").drop_duplicates("player_id").set_index("player_id")["team_id"]
 
 
-def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per_week: int, settings_kw: dict, top_k: int, rollouts: int,
-                  margin: float = 0.0, arms: tuple = ("engine", "static"), adaptive_kw: dict | None = None):
+def project_past_season(conn, st_all, players, year: int) -> pd.DataFrame:
+    """Pre-season projections for a past season using only earlier seasons (the slow part: a rolling backtest picks the models)."""
     season = f"{year}-{str(year + 1)[-2:]}"
     st = st_all[st_all["year"] < year]
     ctx = team_context(conn, list(range(int(st_all["year"].min()) + 1, year + 1)))      # team context, as in the shipped model
@@ -61,10 +61,28 @@ def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per
     proj = P.project_season(st, players, year, bt.selection, context=ctx)
     proj["team_id"] = proj["player_id"].map(team_at_season_start(conn, season))
     proj = add_eligibility(proj)  # heuristic eligibility for every strategy alike
-    proj = pd.concat([proj, z_scores(proj)], axis=1)
-    sched = season_periods(conn, season)   # 18 regular-season matchup periods (All-Star stretch = one 2-week matchup)
+    return pd.concat([proj, z_scores(proj)], axis=1)
+
+
+def prepare_year(conn, st_all, players, cal, year: int, sims_per_week: int, playoffs: bool = False, proj: pd.DataFrame | None = None):
+    """
+    Everything a past season needs, using ONLY information from before it: pre-season projections, the simulated library
+    built from them, and the actual day-by-day library of what really happened. `playoffs` adds the 3 fantasy playoff weeks;
+    pass `proj` (from project_past_season) to skip the slow projection step.
+    Returns (season, proj, schedule, simulated library, actual library).
+    """
+    season = f"{year}-{str(year + 1)[-2:]}"
+    if proj is None:
+        proj = project_past_season(conn, st_all, players, year)
+    sched = season_periods(conn, season, n_regular=18, n_playoff=3 if playoffs else 0)   # All-Star stretch = one 2-week matchup
     lib = build_library(proj, cal, sched, sims_per_week=sims_per_week, seed=year)
     actual = actual_library(conn, season, lib.player_ids, sched)   # what REALLY happened, day by day
+    return season, proj, sched, lib, actual
+
+
+def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per_week: int, settings_kw: dict, top_k: int, rollouts: int,
+                  margin: float = 0.0, arms: tuple = ("engine", "static"), adaptive_kw: dict | None = None, playoffs: bool = False):
+    season, proj, sched, lib, actual = prepare_year(conn, st_all, players, cal, year, sims_per_week, playoffs)
 
     rows = []
     for d in range(n_drafts):
@@ -84,7 +102,8 @@ def validate_year(conn, st_all, players, cal, year: int, n_drafts: int, sims_per
     return pd.DataFrame(rows)
 
 
-def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, tag="", arms=("engine", "static"), adaptive_kw=None):
+def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, tag="", arms=("engine", "static"), adaptive_kw=None,
+         playoffs=False):
     arms = tuple(dict.fromkeys(("static",) + tuple(arms)))      # "static" (best available by the board) is always the baseline
     out = Path(out_dir)
     conn = sqlite3.connect(out / "nba.db")
@@ -93,7 +112,8 @@ def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, t
         "SELECT player_id, name, position_1, position_2, draft_year, draft_position, rookie_year, last_year FROM player", conn)
     cal = Calibration.load(out / "calibration.json")
     kw = dict(n_teams=10, roster_size=13, active_slots=10, max_centers=3)
-    frames = [validate_year(conn, st_all, players, cal, y, n_drafts, sims_per_week, kw, top_k, rollouts, margin, arms, adaptive_kw) for y in years]
+    frames = [validate_year(conn, st_all, players, cal, y, n_drafts, sims_per_week, kw, top_k, rollouts, margin, arms, adaptive_kw, playoffs)
+              for y in years]
     res = pd.concat(frames, ignore_index=True)
     if "engine" in arms:                                       # column names the report script reads
         res["gain_sim"] = res["sim_engine"] - res["sim_static"]
@@ -136,8 +156,10 @@ if __name__ == "__main__":
     ap.add_argument("--arms", nargs="+", default=["engine", "static"], choices=["engine", "static", "adaptive"],
                     help="ways to draft my team with the same bots; 'static' is always included as the baseline "
                          "('adaptive' = the category-aware policy of src/draft/policy.py; skipping 'engine' makes a run much faster)")
+    ap.add_argument("--playoffs", action="store_true",
+                    help="also simulate and score the 3 fantasy playoff weeks (21 matchup periods instead of 18); off by default so older results stay comparable")
     ap.add_argument("--adaptive-candidates", type=int, default=None)
     ap.add_argument("--adaptive-margin", type=float, default=None)
     a = ap.parse_args()
     akw = {k: v for k, v in (("n_candidates", a.adaptive_candidates), ("margin", a.adaptive_margin)) if v is not None}
-    main(a.years, a.drafts, a.sims, a.top_k, a.rollouts, a.out_dir, a.margin, a.tag, tuple(a.arms), akw)
+    main(a.years, a.drafts, a.sims, a.top_k, a.rollouts, a.out_dir, a.margin, a.tag, tuple(a.arms), akw, a.playoffs)

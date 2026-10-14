@@ -75,10 +75,11 @@ if __name__ == "__main__":
     ap.add_argument("--db-path", default=str(ROOT / "data/processed/nba.db"))
     ap.add_argument("--year", type=int, default=None)
     ap.add_argument("--sims-per-week", dest="sims", type=int, default=40, help="draws per real matchup period")
-    ap.add_argument("--include-playoffs", action="store_true", help="also simulate the 3 playoff matchup periods")
+    ap.add_argument("--no-playoffs", action="store_true",
+                    help="simulate only the 18 regular-season weeks (default: also the 3 fantasy playoff weeks, Mar 8-28, so every pick is judged on all 21)")
     ap.add_argument("--fill-cup-games", action="store_true",
                     help="place each team's not-yet-scheduled NBA Cup games on random days of the Cup week (default: ignore them)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-dir", default=str(ROOT / "data/processed"))
     a = ap.parse_args()
-    main(a.db_path, a.year, a.sims, a.seed, a.out_dir, a.include_playoffs, a.fill_cup_games)
+    main(a.db_path, a.year, a.sims, a.seed, a.out_dir, not a.no_playoffs, a.fill_cup_games)

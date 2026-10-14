@@ -247,3 +247,33 @@ def test_recommended_pick_gives_near_ties_to_the_board_and_clear_wins_to_the_eng
     assert recommended_pick(rec, margin=0.0)["player_id"] == 1         # no guard: the simulated best
     clear = pd.DataFrame({"player_id": [1, 2], "static_rank": [9, 1], "win_prob": [0.60, 0.55]})
     assert recommended_pick(clear, margin=0.01)["player_id"] == 1      # a 5-point gap is not a tie
+
+
+# ---------------------------------------------------------------------------
+# mean-matching of shooting (attempts and make rates are correlated in the copula)
+# ---------------------------------------------------------------------------
+def _made_over_expected(lib, proj):
+    wm = weekly_means(lib)
+    g = wm["games"].to_numpy()
+    sim = np.array([wm["fgm"].sum(), wm["tpm"].sum(), wm["ftm"].sum()])
+    want = np.array([(proj["fgm"].to_numpy() * g).sum(), (proj["tpm"].to_numpy() * g).sum(), (proj["ftm"].to_numpy() * g).sum()])
+    return sim / want
+
+
+def test_mean_match_makes_simulated_makes_equal_projected_makes(cal, schedule):
+    proj = make_projection(40)
+    raw = _made_over_expected(build_library(proj, cal, schedule, sims_per_week=400, seed=5, mean_match=False), proj)
+    fixed = _made_over_expected(build_library(proj, cal, schedule, sims_per_week=400, seed=5), proj)
+    assert (raw > 1.005).all()                    # correlating attempts with the make-rate quantile inflates makes
+    assert (np.abs(fixed - 1) < 0.01).all(), fixed
+    assert (np.abs(fixed - 1) < np.abs(raw - 1)).all()
+
+
+def test_estimated_make_scale_is_below_one_and_applied_only_to_make_rates(cal, schedule):
+    from src.simulation.copula import estimate_make_scale
+    proj = make_projection(30)
+    scale = estimate_make_scale(proj, cal, schedule, seed=1)
+    assert scale.shape == (3,) and (scale < 1).all() and (scale > 0.9).all()
+    given = build_library(proj, cal, schedule, sims_per_week=20, seed=2, make_scale=np.ones(3))
+    none = build_library(proj, cal, schedule, sims_per_week=20, seed=2, mean_match=False)
+    assert np.array_equal(given.stats, none.stats)     # an explicit scale of 1 is the uncorrected library

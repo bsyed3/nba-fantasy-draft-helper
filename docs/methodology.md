@@ -58,7 +58,7 @@ game logs, and the share of missed games that come from whole-week absences (≈
 **Simulation** (`copula.py`): each simulated matchup is one of the season's real **matchup periods** (`schedule.py`): Mon–Sun
 weeks, except that the NBA Cup knockout week folds into the week before it and the All-Star break folds into the week after — so for 2026-27
 weeks 1–6 are single weeks from Oct 19, **week 7 = Nov 30–Dec 13**, weeks 8–16 are single weeks, **week 17 = Feb 15–28**, week 18 ends the regular season Mar 7
-and weeks 19–21 are the playoffs (Mar 8–28). The engine's objective uses the 18 regular-season periods (`--include-playoffs` adds the rest).
+and weeks 19–21 are the playoffs (Mar 8–28). The library now includes all 21 periods by default (`scripts/build_library.py --no-playoffs` drops the 3 playoff weeks), so the engine's objective is the average weekly win probability over the 18 regular-season and 3 playoff weeks.
 About 30 NBA Cup games aren't on the published schedule yet (every team shows 80 of 82); they are ignored by default, so week 7 is simulated with its
 published games only (`--fill-cup-games` places them on random Cup-week days instead). Players are played game by game on
 each team's real days. Per player-week: talent draw → availability (whole-week absence with prob

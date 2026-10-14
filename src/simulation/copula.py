@@ -51,13 +51,40 @@ def _sigma_matrix(proj: pd.DataFrame, cal: Calibration) -> np.ndarray:
     return out
 
 
+def estimate_make_scale(proj: pd.DataFrame, cal: Calibration, schedule: Schedule, seed: int = 0,
+                        sims_per_week: int = 20, iters: int = 2) -> np.ndarray:
+    """
+    Multipliers [2-pt, 3-pt, free-throw] on the make rates that make the simulated makes equal the projected makes.
+
+    The projection's rates are ratios of totals, which already contain how attempts and make rate move together; the copula
+    and talent draws then re-create that correlation on top, so without correction the simulation makes ~1% too many
+    field goals, ~2.5% too many threes and ~0.7% too many free throws. This runs short pilot simulations and rescales the
+    rates (pooled over all players, volume-weighted) until simulated and projected makes agree.
+    """
+    scale = np.ones(3)
+    a2, a3, af = (proj[c].to_numpy(float) for c in ("fga2", "fga3", "fta"))
+    q = np.column_stack([proj["r_p2"], proj["r_p3"], proj["r_ft"]]).astype(float)
+    for it in range(iters):
+        lib = build_library(proj, cal, schedule, sims_per_week=sims_per_week, seed=seed + 7919 + it, make_scale=scale)
+        tot = lib.stats.sum(axis=(1, 2), dtype=np.float64)                                   # [P, 10] over every simulated day
+        games = lib.played.sum(axis=(1, 2)).astype(float)                                   # [P]
+        sim = np.array([(tot[:, STAT_IDX["fgm"]] - tot[:, STAT_IDX["tpm"]]).sum(), tot[:, STAT_IDX["tpm"]].sum(), tot[:, STAT_IDX["ftm"]].sum()])
+        want = np.array([(a2 * q[:, 0] * games).sum(), (a3 * q[:, 1] * games).sum(), (af * q[:, 2] * games).sum()])
+        scale = scale * np.where(sim > 0, want / np.maximum(sim, 1e-9), 1.0)
+    return scale
+
+
 def build_library(proj: pd.DataFrame, cal: Calibration, schedule: Schedule, sims_per_week: int = 40,
-                  seed: int = 0, chunk: int = 40) -> Library:
+                  seed: int = 0, chunk: int = 40, make_scale: np.ndarray | None = None, mean_match: bool = True) -> Library:
     """
     proj: one row per player with per-game means `fga2 fga3 fta reb ast stl blk tov`,
     shooting rates `r_p2 r_p3 r_ft`, `avail`, `exp`, `draft_pick`, `team_id` (current NBA team), `player_id`.
     Sim s plays matchup period (s % n_periods).
+    make_scale: multipliers on the (2-pt, 3-pt, FT) make rates; estimated by `estimate_make_scale` unless given or
+    `mean_match=False` (so the library's mean makes equal the projection's).
     """
+    if make_scale is None and mean_match:
+        make_scale = estimate_make_scale(proj, cal, schedule, seed)
     rng = np.random.default_rng(seed)
     P, W = len(proj), schedule.n_weeks
     S = W * sims_per_week
@@ -66,6 +93,8 @@ def build_library(proj: pd.DataFrame, cal: Calibration, schedule: Schedule, sims
     sigma = _sigma_matrix(proj, cal)
     mu = np.column_stack([proj[d].to_numpy(float) for d in COUNT_DIMS])                    # [P, 8]
     q0 = np.column_stack([proj["r_p2"], proj["r_p3"], proj["r_ft"]]).astype(float)         # [P, 3]
+    if make_scale is not None:
+        q0 = q0 * np.asarray(make_scale, dtype=float)[None, :]
     avail = np.clip(proj["avail"].to_numpy(float), 0.03, 0.995)
     r_nb = np.array([cal.dispersion[d] for d in COUNT_DIMS])
     rho = np.array([cal.rho[d] for d in PCT_DIMS])
