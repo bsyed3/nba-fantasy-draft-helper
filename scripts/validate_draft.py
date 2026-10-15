@@ -57,7 +57,9 @@ def project_past_season(conn, st_all, players, year: int) -> pd.DataFrame:
     season = f"{year}-{str(year + 1)[-2:]}"
     st = st_all[st_all["year"] < year]
     ctx = team_context(conn, list(range(int(st_all["year"].min()) + 1, year + 1)))      # team context, as in the shipped model
-    bt = P.backtest(st, folds=list(range(year - 3, year)), verbose=False, context=ctx)
+    # the three seasons before `year`, but a fold needs at least 4 earlier seasons of training history (2021 therefore gets two folds)
+    folds = [f for f in range(year - 3, year) if f >= int(st_all["year"].min()) + 4]
+    bt = P.backtest(st, folds=folds, verbose=False, context=ctx)
     proj = P.project_season(st, players, year, bt.selection, context=ctx)
     proj["team_id"] = proj["player_id"].map(team_at_season_start(conn, season))
     proj = add_eligibility(proj)  # heuristic eligibility for every strategy alike
@@ -122,7 +124,8 @@ def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, t
         if a not in ("static", "engine"):
             res[f"gain_sim_{a}"] = res[f"sim_{a}"] - res["sim_static"]
             res[f"gain_real_{a}"] = res[f"real_{a}"] - res["real_static"]
-    res.to_csv(out / (("validation_results" if margin == 0 else f"validation_results_margin{margin:g}") + tag + ".csv"), index=False)
+    out_file = out / (("validation_results" if margin == 0 else f"validation_results_margin{margin:g}") + tag + ".csv")
+    res.to_csv(out_file, index=False)
 
     def summ(g):
         n = len(g)
@@ -139,7 +142,7 @@ def main(years, n_drafts, sims_per_week, top_k, rollouts, out_dir, margin=0.0, t
     table.loc["ALL"] = summ(res)
     print("\nActual-weekly-results validation (weekly matchup win probability):")
     print(table.round(4).to_string())
-    print(f"\nWrote {out / 'validation_results.csv'}")
+    print(f"\nWrote {out_file}")
 
 
 if __name__ == "__main__":

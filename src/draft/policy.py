@@ -29,6 +29,7 @@ import pandas as pd
 from src.draft.engine import DraftEngine, category_matrix
 from src.draft.state import DraftState
 from src.draft.values import CATEGORIES
+from src.simulation.library import Library
 
 # Share of a roster slot's simulated weekly production that the real daily lineup actually uses, by rank within
 # the roster (rank 1 = highest board value). Measured by `calibrate_rank_weights` on board-drafted mock rosters
@@ -36,22 +37,53 @@ from src.draft.values import CATEGORIES
 # about six players with a game on a given day, so almost every game finds an open slot.
 DEFAULT_RANK_WEIGHT_ACTIVE = 1.0
 DEFAULT_RANK_WEIGHT_BENCH = 0.97
-DEFAULT_MARGIN = 0.01          # tuned on development seeds, confirmed on fresh ones (scripts/analysis/adaptive_policy_test.py)
+DEFAULT_MARGIN = 0.005         # with 200 simulated draws per week, 0.005 beat 0.01 (fresh drafts: +0.0193 vs +0.0129; see HANDOFF)
 DEFAULT_CANDIDATES = 6         # 6 beat 12 and 24 on both development and fresh seeds (more candidates = more noise to chase)
+POLICY_DRAWS_PER_WEEK = 200    # the policy searches a library with this many draws per week (the engine's own library has 40)
+POLICY_SEED = 24680
+
+
+def weekly_totals(lib: Library, sim_stride: int = 1) -> np.ndarray:
+    """W[p, s, k]: player p's whole-week total of stat k in simulated week s (no lineup rules), float32 [P, S, 10]."""
+    sims = np.arange(0, lib.played.shape[1], max(sim_stride, 1))
+    W = np.empty((lib.played.shape[0], len(sims), lib.stats.shape[-1]), dtype=np.float32)
+    for p in range(W.shape[0]):
+        W[p] = np.einsum("sd,sdk->sk", lib.played[p][sims].astype(np.float32), lib.stats[p][sims].astype(np.float32))
+    return W
+
+
+def save_weeks(path, lib: Library, draws_per_week: int) -> None:
+    """Store a library's weekly totals (all the policy needs from it) compactly: ~1/25 the size of the full library."""
+    W = weekly_totals(lib)
+    np.savez_compressed(path, player_ids=lib.player_ids, W=W.astype(np.uint16), draws_per_week=draws_per_week)
+
+
+def load_weeks(path, player_ids: np.ndarray) -> np.ndarray | None:
+    """The stored weekly totals as float32, or None if the file is missing or was built for a different player list."""
+    try:
+        z = np.load(path)
+        if not np.array_equal(z["player_ids"], np.asarray(player_ids)):
+            return None
+        return z["W"].astype(np.float32)
+    except (OSError, KeyError, ValueError):
+        return None
 
 
 class AdaptivePolicy:
     def __init__(self, engine: DraftEngine, n_candidates: int = DEFAULT_CANDIDATES, margin: float = DEFAULT_MARGIN,
-                 rank_weights: np.ndarray | None = None, sim_stride: int = 1):
+                 rank_weights: np.ndarray | None = None, sim_stride: int = 1, weeks: np.ndarray | None = None):
+        """
+        weeks: a weekly-totals table [players in engine order, weeks, stats] to search instead of the engine's own library
+        (e.g. one built from more draws per week; see `load_weeks`).
+        """
         self.engine = engine
         self.n_candidates, self.margin = n_candidates, margin
-        lib = engine.lib
-        sims = np.arange(0, lib.played.shape[1], max(sim_stride, 1))
-        P = lib.played.shape[0]
-        # W[p, s, k]: player p's whole-week total of stat k in simulated week s (no lineup rules)
-        self.W = np.empty((P, len(sims), lib.stats.shape[-1]), dtype=np.float32)
-        for p in range(P):
-            self.W[p] = np.einsum("sd,sdk->sk", lib.played[p][sims].astype(np.float32), lib.stats[p][sims].astype(np.float32))
+        if weeks is None:
+            self.W = weekly_totals(engine.lib, sim_stride)
+        else:
+            if weeks.shape[0] != len(engine.pid):
+                raise ValueError("weekly-totals table does not match the engine's player list")
+            self.W = np.asarray(weeks, dtype=np.float32)[:, :: max(sim_stride, 1)]
         st = engine.settings
         if rank_weights is None:
             rank_weights = np.where(np.arange(st.roster_size) < st.active_slots, DEFAULT_RANK_WEIGHT_ACTIVE, DEFAULT_RANK_WEIGHT_BENCH)

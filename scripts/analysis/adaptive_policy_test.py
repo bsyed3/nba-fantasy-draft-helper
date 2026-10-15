@@ -37,26 +37,38 @@ DATA = ROOT / "data" / "processed"
 KW = dict(n_teams=10, roster_size=13, active_slots=10, max_centers=3)
 
 
-def main(slots, seeds, candidates, margin, stride, holdout_sims, out, seed_offset=500):
+def main(slots, seeds, candidates, margin, stride, holdout_sims, out, seed_offset=500, policy_sims=None, weeks_file=None):
     proj = pd.read_parquet(DATA / "projections_2026.parquet")
     lib = Library.load(DATA / "library_2026.npz")
     proj = proj[proj["player_id"].isin(lib.player_ids)].reset_index(drop=True)
     t0 = time.time()
     conn = sqlite3.connect(DATA / "nba.db")
-    sched = season_periods(conn, "2026-27", n_regular=18, n_playoff=0, fill_unscheduled=False)
-    lib_b = build_library(proj, Calibration.load(DATA / "calibration.json"), sched, sims_per_week=holdout_sims, seed=987654)
-    print(f"held-out library built in {time.time() - t0:.0f}s ({lib_b.stats.shape[1]} sims)")
+    cal = Calibration.load(DATA / "calibration.json")
+    sched = season_periods(conn, "2026-27", n_regular=18, n_playoff=3, fill_unscheduled=False)    # all 21 weeks, as shipped
+    if policy_sims:        # the library the policy searches (and the in-sample score uses): rebuilt with this many draws per week
+        lib = build_library(proj, cal, sched, sims_per_week=policy_sims, seed=24680)
+        print(f"policy library: {policy_sims} draws per week = {lib.stats.shape[1]} simulated weeks, built in {time.time() - t0:.0f}s")
+    lib_b = build_library(proj, cal, sched, sims_per_week=holdout_sims, seed=987654)
+    print(f"held-out library built in {time.time() - t0:.0f}s ({lib_b.stats.shape[1]} simulated weeks)")
 
     base_eng = DraftEngine(lib, proj, LeagueSettings(my_slot=5, **KW))
-    pol0 = AdaptivePolicy(base_eng, n_candidates=candidates, margin=margin, sim_stride=stride)
-    # measure how much of each roster rank's production the real daily lineup uses, from board-drafted rosters
-    cal_rosters = []
-    for sd in range(4):
-        drafted = run_mock_draft(base_eng, base_eng.settings, best_available, bot_seed=sd)
-        cal_rosters += [drafted[t] for t in (1, 4, 7, 10)]
-    w = calibrate_rank_weights(base_eng, cal_rosters)
-    print("lineup usage by roster rank (1 = best on the roster):", np.round(w, 2).tolist())
-    pol0.rank_weights = w.astype(np.float32)
+    if weeks_file:     # test exactly what ships: the stored weekly-totals table and the policy's default rank weights
+        from src.draft.policy import load_weeks
+        weeks = load_weeks(weeks_file, base_eng.pid)
+        if weeks is None:
+            raise SystemExit(f"{weeks_file} is missing or was built for a different player list")
+        pol0 = AdaptivePolicy(base_eng, n_candidates=candidates, margin=margin, weeks=weeks)
+        print(f"shipped policy table: {weeks.shape[1]} simulated weeks; default rank weights {np.round(pol0.rank_weights, 2).tolist()}")
+    else:
+        pol0 = AdaptivePolicy(base_eng, n_candidates=candidates, margin=margin, sim_stride=stride)
+        # measure how much of each roster rank's production the real daily lineup uses, from board-drafted rosters
+        cal_rosters = []
+        for sd in range(4):
+            drafted = run_mock_draft(base_eng, base_eng.settings, best_available, bot_seed=sd)
+            cal_rosters += [drafted[t] for t in (1, 4, 7, 10)]
+        w = calibrate_rank_weights(base_eng, cal_rosters)
+        print("lineup usage by roster rank (1 = best on the roster):", np.round(w, 2).tolist())
+        pol0.rank_weights = w.astype(np.float32)
 
     rows = []
     for slot in slots:
@@ -103,7 +115,11 @@ if __name__ == "__main__":
     ap.add_argument("--sim-stride", dest="stride", type=int, default=1)
     ap.add_argument("--holdout-sims", type=int, default=40)
     ap.add_argument("--seed-offset", type=int, default=500, help="first bot seed (tune on one range, confirm on another)")
+    ap.add_argument("--weeks-file", default=None,
+                    help="use a stored weekly-totals table (data/processed/policy_weeks_<year>.npz) for the policy instead of rebuilding one: tests what ships")
+    ap.add_argument("--policy-sims", type=int, default=None,
+                    help="draws per week in the library the policy searches (default: the shipped library, 40 per week); more draws = less noise")
     ap.add_argument("--out", default=str(ROOT / "exports" / "adaptive_policy_test.csv"))
     a = ap.parse_args()
     Path(a.out).parent.mkdir(exist_ok=True)
-    main(a.slots, a.seeds, a.candidates, a.margin, a.stride, a.holdout_sims, a.out, a.seed_offset)
+    main(a.slots, a.seeds, a.candidates, a.margin, a.stride, a.holdout_sims, a.out, a.seed_offset, a.policy_sims, a.weeks_file)

@@ -167,3 +167,31 @@ def test_plan_ahead_plays_out_the_bots_and_never_offers_a_drafted_player(cal, sc
     assert pick is not None and pick in set(table["player_id"])
     assert not (set(table["player_id"]) & state.drafted)
     assert len(table) == 5 and table["board_rank"].min() >= 3              # two bots already took players before my pick
+
+
+# ---------------------------------------------------------------------------
+# stored weekly-totals table (the policy searches more simulated draws than the engine's library holds)
+# ---------------------------------------------------------------------------
+def test_weekly_totals_table_roundtrips_and_gives_the_same_policy(cal, schedule, tmp_path):
+    from src.draft.policy import load_weeks, save_weeks, weekly_totals
+    eng, s = small_engine(cal, schedule, my_slot=2)
+    path = tmp_path / "weeks.npz"
+    save_weeks(path, eng.lib, draws_per_week=50)
+    W = load_weeks(path, eng.pid)
+    assert W is not None and W.dtype == np.float32 and np.array_equal(W, weekly_totals(eng.lib))   # integer totals survive uint16 exactly
+    own, from_file = AdaptivePolicy(eng, n_candidates=5), AdaptivePolicy(eng, n_candidates=5, weeks=W)
+    state = DraftState(s, centers=set(eng.center_ids))
+    assert own.plan(state)[0] == from_file.plan(state)[0]
+    pd.testing.assert_frame_equal(own.plan(state)[1], from_file.plan(state)[1])
+
+
+def test_weekly_totals_table_is_rejected_for_a_different_player_list_or_shape(cal, schedule, tmp_path):
+    import pytest
+    from src.draft.policy import load_weeks, save_weeks
+    eng, _ = small_engine(cal, schedule)
+    path = tmp_path / "weeks.npz"
+    save_weeks(path, eng.lib, draws_per_week=50)
+    assert load_weeks(path, eng.pid[::-1]) is None                      # built for another player order
+    assert load_weeks(tmp_path / "missing.npz", eng.pid) is None
+    with pytest.raises(ValueError):
+        AdaptivePolicy(eng, weeks=np.zeros((3, 10, 10), dtype=np.float32))

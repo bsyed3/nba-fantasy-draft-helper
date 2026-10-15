@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.draft import store
 from src.draft.engine import DEFAULT_PICK_MARGIN, DraftEngine, recommended_pick
-from src.draft.policy import AdaptivePolicy
+from src.draft.policy import AdaptivePolicy, load_weeks
 from src.draft.state import DraftState, LeagueSettings
 from src.draft.values import CAT_LABELS, CATEGORIES
 from src.simulation.copula import Library
@@ -81,7 +81,11 @@ def get_engine(_proj, _lib, settings: LeagueSettings) -> DraftEngine:
 
 @st.cache_resource
 def get_policy(_engine: DraftEngine, settings: LeagueSettings) -> AdaptivePolicy:
-    return AdaptivePolicy(_engine)
+    """The category-aware policy, searching the 200-draws-per-week table built by scripts/build_library.py when it exists
+    (it was tested to pick better than the engine library's 40 draws), else the engine's own library."""
+    years = sorted(int(p.stem.split("_")[1]) for p in DATA.glob("library_*.npz"))
+    weeks = load_weeks(DATA / f"policy_weeks_{years[-1]}.npz", _engine.pid) if years else None
+    return AdaptivePolicy(_engine, weeks=weeks)
 
 
 @st.cache_data(show_spinner="Simulating the rest of the draft...")
@@ -271,8 +275,8 @@ with tab_draft:
                                 column_config={"P(win ≥5 of 9) %": st.column_config.NumberColumn(format="%.1f"),
                                                "vs board's top": st.column_config.NumberColumn(format="%+.1f")})
                             st.caption(f"Each of the board's top {len(why)} available players is added to my roster, the draft is finished with "
-                                       f"the bots' usual order, and the whole roster is scored on the simulated weeks. A player is taken over the "
-                                       f"board's top choice only if he is ahead by more than {policy.margin * 100:.0f} points (smaller gaps are noise).")
+                                       f"the bots' usual order, and the whole roster is scored on {policy.W.shape[1]:,} simulated weeks. A player is taken "
+                                       f"over the board's top choice only if he is ahead by more than {policy.margin * 100:.1f} points (smaller gaps are noise).")
                     else:
                         top = rec.iloc[0]
                         if top["player_id"] != best["player_id"]:

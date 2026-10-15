@@ -37,7 +37,8 @@ def latest_year(out: Path) -> int:
     return max(years)
 
 
-def main(db_path: str, year: int | None, sims: int, seed: int, out_dir: str, playoffs: bool, fill_cup: bool = False) -> None:
+def main(db_path: str, year: int | None, sims: int, seed: int, out_dir: str, playoffs: bool, fill_cup: bool = False,
+         policy_sims: int = 0, policy_only: bool = False) -> None:
     out = Path(out_dir)
     year = year or latest_year(out)
     conn = sqlite3.connect(db_path)
@@ -64,10 +65,19 @@ def main(db_path: str, year: int | None, sims: int, seed: int, out_dir: str, pla
         else:
             print(f"  note: {n_missing} NBA Cup games are not yet on the published schedule; they are ignored -- week 7 uses only the "
                   f"published games (pass --fill-cup-games to place the missing ones at random instead)")
-    print(f"Simulating {sched.n_weeks} real {season} matchup periods x {sims} draws x {len(proj)} players, game by game...")
-    lib = build_library(proj, cal, sched, sims_per_week=sims, seed=seed)
-    lib.save(out / f"library_{year}.npz")
-    print(f"  saved {out / f'library_{year}.npz'} ({lib.stats.nbytes / 1e6:.0f} MB uncompressed)")
+    if not policy_only:
+        print(f"Simulating {sched.n_weeks} real {season} matchup periods x {sims} draws x {len(proj)} players, game by game...")
+        lib = build_library(proj, cal, sched, sims_per_week=sims, seed=seed)
+        lib.save(out / f"library_{year}.npz")
+        print(f"  saved {out / f'library_{year}.npz'} ({lib.stats.nbytes / 1e6:.0f} MB uncompressed)")
+    if policy_sims:
+        # the category-aware pick policy searches many more simulated weeks than the engine's library holds; it only needs weekly totals
+        from src.draft.policy import POLICY_SEED, save_weeks
+        print(f"Simulating {policy_sims} draws per week for the pick policy ({sched.n_weeks * policy_sims} weeks), keeping weekly totals only...")
+        big = build_library(proj, cal, sched, sims_per_week=policy_sims, seed=POLICY_SEED)
+        path = out / f"policy_weeks_{year}.npz"
+        save_weeks(path, big, policy_sims)
+        print(f"  saved {path} ({path.stat().st_size / 1e6:.0f} MB)")
 
 
 if __name__ == "__main__":
@@ -79,7 +89,10 @@ if __name__ == "__main__":
                     help="simulate only the 18 regular-season weeks (default: also the 3 fantasy playoff weeks, Mar 8-28, so every pick is judged on all 21)")
     ap.add_argument("--fill-cup-games", action="store_true",
                     help="place each team's not-yet-scheduled NBA Cup games on random days of the Cup week (default: ignore them)")
+    ap.add_argument("--policy-sims", type=int, default=200,
+                    help="draws per week for the weekly-totals table the pick policy searches (0 = skip); default 200 (5x the engine library)")
+    ap.add_argument("--policy-only", action="store_true", help="only (re)build the policy's weekly-totals table, leave the library alone")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-dir", default=str(ROOT / "data/processed"))
     a = ap.parse_args()
-    main(a.db_path, a.year, a.sims, a.seed, a.out_dir, not a.no_playoffs, a.fill_cup_games)
+    main(a.db_path, a.year, a.sims, a.seed, a.out_dir, not a.no_playoffs, a.fill_cup_games, a.policy_sims, a.policy_only)
