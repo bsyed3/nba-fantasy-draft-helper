@@ -70,7 +70,7 @@ them are far more reliable than the absolute win percentages (which are relative
 **Stated simplifications:** the daily lineup is a greedy fill in static-value order, not a per-day optimal
 assignment; bots draft by ESPN ADP (or our rank if ADP is missing) plus noise, not positional need or personal
 bias; IR is not modelled (a drafted player who is hurt just misses games); the schedule's still-TBD NBA Cup games
-are absent. The library simulates all 21 matchup weeks (18 regular-season + the 3 fantasy playoff weeks, Mar 8-28; `--no-playoffs` for the regular season only) and every pick is judged on their average weekly win probability; there is no playoff-seeding model (who qualifies).
+are absent. The pick policy searches a separate, larger table of simulated weekly totals (`data/processed/policy_weeks_2026.npz`, 200 draws per week, built by `scripts/build_library.py`). The library simulates all 21 matchup weeks (18 regular-season + the 3 fantasy playoff weeks, Mar 8-28; `--no-playoffs` for the regular season only) and every pick is judged on their average weekly win probability; there is no playoff-seeding model (who qualifies).
 
 ## Data
 
@@ -101,7 +101,9 @@ projected as active on opening night. `python scripts/export_projections.py` wri
 
 Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id` or `name`, plus any of
 `mpg, avail, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov` per game) next to the DB and
-`build_projections.py` will apply them — e.g. to anchor a rookie to a source you trust.
+`build_projections.py` will apply them — e.g. to anchor a rookie to a source you trust. Overriding `mpg` also rescales the
+row's other per-game totals (per-minute rates kept) unless the row sets them itself. After editing the file, `python scripts/build_projections.py
+--overrides-only` re-applies it to the saved projections in seconds (no backtest); then rerun `scripts/build_library.py`.
 
 ## Validation and the full report
 
