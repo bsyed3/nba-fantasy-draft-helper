@@ -47,9 +47,15 @@ from src.features.team_context import known_absent_ids, team_context
 from src.models import projection as P
 
 OVERRIDE_COLS = ["mpg", "avail", "fga", "fgm", "tpa", "tpm", "fta", "ftm", "reb", "ast", "stl", "blk", "tov"]
+COUNT_COLS = [c for c in OVERRIDE_COLS if c not in ("mpg", "avail")]      # per-game totals that scale with minutes
 
 
 def apply_overrides(proj: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """
+    Hand-set values from data/external/projection_overrides.csv (player_id or name, plus any of OVERRIDE_COLS, per game).
+    Overriding `mpg` also rescales every per-game total that the row does not set itself, keeping his per-minute rates: the
+    simulation and the board read the per-game totals, so changing only the minutes would change nothing.
+    """
     if not path.exists():
         return proj
     ov = pd.read_csv(path)
@@ -64,6 +70,12 @@ def apply_overrides(proj: pd.DataFrame, path: Path) -> pd.DataFrame:
         if len(idx) != 1:
             print(f"  override skipped (matched {len(idx)} players): {row[key]}")
             continue
+        old_mpg = float(proj.loc[idx[0], "mpg"])
+        if "mpg" in ov.columns and pd.notna(row["mpg"]) and old_mpg > 0:
+            scale = float(row["mpg"]) / old_mpg
+            for c in COUNT_COLS:
+                if not (c in ov.columns and pd.notna(row[c])):
+                    proj.loc[idx, c] = proj.loc[idx, c] * scale
         for c in OVERRIDE_COLS:
             if c in ov.columns and pd.notna(row[c]):
                 proj.loc[idx, c] = row[c]
@@ -82,8 +94,29 @@ ABSENCE_FILES = [ROOT / "data/external/known_absences.csv",            # generat
                  ROOT / "data/external/known_absences_manual.csv"]    # hand-edited; wins, never overwritten
 
 
-def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_ctx: bool = True) -> None:
+def reapply_overrides(out: Path, target_year: int) -> None:
+    """
+    Re-apply data/external/projection_overrides.csv to the SAVED projections and refresh the value scores and ranks, without
+    re-running the backtest. Overrides are the last thing the projection step does to a player's stats, so this gives the same
+    table as a full run (and applying the same file twice changes nothing). Rebuild the simulation library afterwards.
+    """
+    path = out / f"projections_{target_year}.parquet"
+    proj = pd.read_parquet(path)
+    proj = apply_overrides(proj, ROOT / "data/external/projection_overrides.csv")
+    proj = proj.drop(columns=[c for c in proj.columns if c.startswith("z_") or c == "rank"])      # old value scores and ranks
+    proj = pd.concat([proj, z_scores(proj)], axis=1)
+    proj = proj.sort_values("z_total", ascending=False).reset_index(drop=True)
+    proj["rank"] = proj.index + 1
+    proj.to_parquet(path)
+    proj.to_csv(out / f"projections_{target_year}.csv", index=False)
+    print(f"re-applied overrides and re-ranked {len(proj)} players -> {path}")
+
+
+def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_ctx: bool = True, overrides_only: bool = False) -> None:
     out = Path(out_dir)
+    if overrides_only:
+        year = target_year or max(int(p.stem.split("_")[1]) for p in out.glob("projections_*.parquet"))
+        return reapply_overrides(out, year)
     conn = sqlite3.connect(db_path)
     st = load_player_season_table(conn)
     players = pd.read_sql_query(
@@ -158,5 +191,7 @@ if __name__ == "__main__":
     ap.add_argument("--folds", type=int, default=5, help="number of backtest seasons")
     ap.add_argument("--out-dir", default=str(ROOT / "data/processed"))
     ap.add_argument("--no-team-context", action="store_true", help="project from each player's own history only (the model before team context)")
+    ap.add_argument("--overrides-only", action="store_true",
+                    help="only re-apply data/external/projection_overrides.csv to the saved projections and re-rank (seconds; no backtest)")
     a = ap.parse_args()
-    main(a.db_path, a.target_year, a.folds, a.out_dir, team_ctx=not a.no_team_context)
+    main(a.db_path, a.target_year, a.folds, a.out_dir, team_ctx=not a.no_team_context, overrides_only=a.overrides_only)

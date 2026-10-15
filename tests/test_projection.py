@@ -286,3 +286,56 @@ def test_returning_veteran_without_history_does_not_get_a_top_pick_rookie_profil
     # the veteran is projected exactly like an undrafted rookie, not like the #3 pick he once was
     assert np.allclose(proj.loc[9002, cols].astype(float), proj.loc[9003, cols].astype(float))
     assert proj.loc[9001, "source"] == proj.loc[9002, "source"] == "rookie_tier"
+
+
+def test_experiment_switches_change_features_without_changing_the_defaults():
+    from src.features.player_seasons import league_priors
+    from src.features.team_context import CTX_COLS
+
+    st = synthetic_seasons()
+    rng = np.random.default_rng(5)
+    ctx = pd.DataFrame([dict(player_id=int(p), year=int(y), **{c: float(rng.uniform(0, 80)) for c in CTX_COLS})
+                        for p in st["player_id"].unique() for y in range(2016, 2025)])
+    ctx["ctx_moved"] = (ctx["ctx_moved"] > 60).astype(float)
+    priors, sg = league_priors(st), st.groupby("year")["sg"].first().to_dict()
+    wide = P.build_wide(st, priors, 2022, sg, ctx)
+    params = P.fit_baseline_params(wide)
+    plain, flagged = P.feature_matrix(wide, params), P.feature_matrix(wide, params, exp_flags=True)
+    assert not any(c.startswith("is_exp") for c in plain.columns)                                   # off by default: shipped features unchanged
+    assert {"is_exp1", "is_exp2", "is_exp3", "pick_x_exp2"} <= set(flagged.columns)
+    assert flagged["is_exp2"].isin([0.0, 1.0]).all() and (flagged["is_exp2"] == (wide["exp"] == 2)).all()
+    # dropping the context features from one stat's models changes that stat's predictions and leaves the others alone
+    train = pd.concat([P.build_wide(st, priors, t, sg, ctx) for t in range(2016, 2022)], ignore_index=True)
+    test = P.build_wide(st, priors, 2022, sg, ctx)
+    base = P.predict_all(train, test)
+    dropped = P.predict_all(train, test, drop={"avail": ("ctx_", "usage_pg")})
+    assert set(base) == set(dropped)
+    assert not np.allclose(base["avail"]["lgbm"], dropped["avail"]["lgbm"])
+    assert np.allclose(base["reb"]["ridge"], dropped["reb"]["ridge"])
+    assert set(P.predict_all(train, test, exp_flags=True)) == set(base)
+
+
+def test_backtest_availability_evaluation_carries_subgroup_columns():
+    bt = P.backtest(synthetic_seasons(), folds=[2021, 2022], verbose=False)
+    assert {"base_avail", "base_mpg", "act_mpg", "gap", "exp", "age", "moved"} <= set(bt.avail_eval.columns)
+
+
+def test_minutes_override_rescales_per_game_totals_explicit_values_win_and_reapplying_changes_nothing(tmp_path):
+    from scripts.build_projections import apply_overrides
+
+    proj = _synthetic_projection()
+    i = proj.index[proj["name"] == "Rookie Star"][0]
+    before = proj.loc[i].copy()
+    others = proj.drop(index=i).copy()
+    csv = tmp_path / "overrides.csv"
+    pd.DataFrame([dict(name="Rookie Star", mpg=before["mpg"] * 1.25, reb=9.0)]).to_csv(csv, index=False)
+    out = apply_overrides(proj, csv)
+    r = out.loc[i]
+    assert abs(r["mpg"] - before["mpg"] * 1.25) < 1e-9 and r["reb"] == 9.0                       # minutes set; the explicit rebound value wins
+    for c in ("fga", "fgm", "tpa", "tpm", "fta", "ftm", "ast", "stl", "blk", "tov"):             # everything else scales with minutes
+        assert abs(r[c] - before[c] * 1.25) < 1e-9, c
+    assert abs(r["fg_pct"] - before["fgm"] / before["fga"]) < 1e-9                                # per-minute rates, so percentages do not move
+    assert abs(r["fga2"] - (r["fga"] - r["tpa"])) < 1e-9 and r["source"] == "override"            # the simulated columns follow
+    pd.testing.assert_frame_equal(out.drop(index=i)[others.columns], others)                      # nobody else changed
+    again = apply_overrides(out, csv)
+    assert np.allclose(again.loc[i, ["mpg", "fga", "ast", "reb"]].astype(float), r[["mpg", "fga", "ast", "reb"]].astype(float))   # applying twice = once

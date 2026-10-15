@@ -166,8 +166,8 @@ def build_wide(st: pd.DataFrame, priors: pd.DataFrame, target_year: int, season_
     return wide
 
 
-def feature_matrix(wide: pd.DataFrame, params: dict[str, tuple[float, float]]) -> pd.DataFrame:
-    """Shared ML features: blends of every stat, per-lag usage, age/experience/draft."""
+def feature_matrix(wide: pd.DataFrame, params: dict[str, tuple[float, float]], exp_flags: bool = False) -> pd.DataFrame:
+    """Shared ML features: blends of every stat, per-lag usage, age/experience/draft. `exp_flags` adds season-of-career indicators."""
     X = pd.DataFrame(index=wide.index)
     for stat in ALL_STATS:
         X[f"bl_{stat}"] = blend(wide, stat, *params[stat])
@@ -184,6 +184,11 @@ def feature_matrix(wide: pd.DataFrame, params: dict[str, tuple[float, float]]) -
     X["is_guard"] = (wide["pos"] == "G").astype(float)
     X["n_lags"] = wide["n_lags"]
     X["gap"] = wide["gap"]
+    if exp_flags:    # lets the models treat 2nd/3rd/4th-year players (and where they were drafted) differently from veterans
+        dp = wide["draft_pick"].fillna(61.0).clip(upper=61.0)
+        for e in (1, 2, 3):
+            X[f"is_exp{e}"] = (wide["exp"] == e).astype(float)
+            X[f"pick_x_exp{e}"] = X[f"is_exp{e}"] * dp
     if "ctx_vac_min" in wide.columns:        # team context, when supplied
         for c in ("ctx_moved", "ctx_vac_min", "ctx_inc_min", "ctx_vac_poss", "ctx_inc_poss",
                   "ctx_vac_min_pos", "ctx_inc_min_pos", "ctx_vac_poss_pos", "ctx_inc_poss_pos"):
@@ -272,13 +277,18 @@ def candidates_for(stat: str) -> list[str]:
     return ["baseline", "ridge"] if stat in PCT_STATS else ["baseline", "ridge", "lgbm"]
 
 
-def predict_all(wide_train: pd.DataFrame, wide_test: pd.DataFrame, only_baseline: bool = False) -> dict[str, dict[str, np.ndarray]]:
-    """{stat: {candidate: predictions for wide_test}} trained on wide_train."""
+def predict_all(wide_train: pd.DataFrame, wide_test: pd.DataFrame, only_baseline: bool = False, drop: dict[str, tuple[str, ...]] | None = None,
+                exp_flags: bool = False) -> dict[str, dict[str, np.ndarray]]:
+    """
+    {stat: {candidate: predictions for wide_test}} trained on wide_train.
+    drop: {stat: feature-name prefixes} to leave out of that stat's ML models (e.g. {"avail": ("ctx_",)}), for experiments.
+    exp_flags: add the season-of-career indicators of `feature_matrix`.
+    """
     params = fit_baseline_params(wide_train)
     mask = _train_mask(wide_train)
     tr = wide_train[mask]
-    X_tr_all = feature_matrix(wide_train, params)[mask]
-    X_te = feature_matrix(wide_test, params)
+    X_tr_all = feature_matrix(wide_train, params, exp_flags)[mask]
+    X_te = feature_matrix(wide_test, params, exp_flags)
     out: dict[str, dict[str, np.ndarray]] = {}
     for stat in ALL_STATS:
         base_te = X_te[f"bl_{stat}"].to_numpy()
@@ -289,8 +299,10 @@ def predict_all(wide_train: pd.DataFrame, wide_test: pd.DataFrame, only_baseline
             ok = np.isfinite(y) & (w > 0)
             resid = (y - X_tr_all[f"bl_{stat}"].to_numpy())[ok]
             wt = w[ok] / w[ok].mean()
+            prefixes = tuple((drop or {}).get(stat, ()))
+            cols = [c for c in X_tr_all.columns if not (prefixes and c.startswith(prefixes))]
             for model in candidates_for(stat)[1:]:
-                r = _fit_predict(model, stat, X_tr_all[ok], resid, wt, X_te)
+                r = _fit_predict(model, stat, X_tr_all[cols][ok], resid, wt, X_te[cols])
                 res[model] = _clip(stat, base_te + r)
             if stat == "avail":
                 returner = (wide_test["gap"] > 0).to_numpy()
@@ -502,8 +514,12 @@ def _pooled_summary(metrics: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]
     return g.drop(columns=["sse", "sw"]), selection
 
 
-def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True, context: pd.DataFrame | None = None) -> BacktestResult:
-    """Train on seasons < T, predict season T, for each T in `folds`. `context` = team-context features (optional)."""
+def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True, context: pd.DataFrame | None = None,
+             drop: dict[str, tuple[str, ...]] | None = None, exp_flags: bool = False) -> BacktestResult:
+    """
+    Train on seasons < T, predict season T, for each T in `folds`. `context` = team-context features (optional);
+    `drop` / `exp_flags` switch features off/on for experiments (see `predict_all`).
+    """
     priors = league_priors(st)
     season_games = st.groupby("year")["sg"].first().to_dict()
     first_year = int(st["year"].min())
@@ -514,7 +530,7 @@ def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True, context: 
     for T in folds:
         train = pd.concat([wides[t] for t in range(first_year + 1, T)], ignore_index=True)
         test = wides[T]
-        preds = predict_all(train, test)
+        preds = predict_all(train, test, drop=drop, exp_flags=exp_flags)
         fold_preds[T] = preds
         for stat in ALL_STATS:
             y = test[f"y_{stat}"].to_numpy(float)
@@ -567,7 +583,12 @@ def backtest(st: pd.DataFrame, folds: list[int], verbose: bool = True, context: 
                                 "pred_avail": fold_preds[T]["avail"][selection["avail"]][ok.to_numpy()],
                                 "pred_mpg": fold_preds[T]["mpg"][selection["mpg"]][ok.to_numpy()],
                                 "act_avail": test.loc[ok, "y_avail"].to_numpy(),
-                                "act_gp": test.loc[ok, "gp_t"].to_numpy(), "act_smiss": test.loc[ok, "smiss_t"].to_numpy()}))
+                                "act_gp": test.loc[ok, "gp_t"].to_numpy(), "act_smiss": test.loc[ok, "smiss_t"].to_numpy(),
+                                # for subgroup diagnostics (returners, movers, age): the recency baseline next to the model, and who the player is
+                                "base_avail": fold_preds[T]["avail"]["baseline"][ok.to_numpy()], "base_mpg": fold_preds[T]["mpg"]["baseline"][ok.to_numpy()],
+                                "act_mpg": test.loc[ok, "y_mpg"].to_numpy(), "gap": test.loc[ok, "gap"].to_numpy(), "exp": test.loc[ok, "exp"].to_numpy(),
+                                "age": test.loc[ok, "age_t"].to_numpy(),
+                                "moved": test.loc[ok, "ctx_moved"].fillna(0).to_numpy() if "ctx_moved" in test.columns else 0.0}))
     return BacktestResult(metrics, summary, selection, oos, pd.concat(ev, ignore_index=True))
 
 
