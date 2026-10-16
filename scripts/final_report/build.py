@@ -1,10 +1,11 @@
 """
 Build the final project report: Markdown + PDF (figures included), written to
-C:\\Users\\SyedB\\Personal\\NBA Fantasy\\NBA Draft Model Report\\.
+C:\\Users\\SyedB\\Personal\\NBA Fantasy\\NBA Draft Model Report\\ and copied into the repository at docs/final_report/.
 
-    python -m scripts.final_report.build                 # everything
-    python -m scripts.final_report.build --only sec_a    # one section group (for development); skips the PDF
-    python -m scripts.final_report.build --no-pdf        # Markdown only
+    python -m scripts.final_report.build                 # everything (and publish to docs/final_report/)
+    python -m scripts.final_report.build --only sec_a    # one section group (for development); skips the PDF and publishing
+    python -m scripts.final_report.build --no-pdf        # Markdown only (publishes the Markdown and figures, not the PDF)
+    python -m scripts.final_report.build --publish-only  # copy the last build into docs/final_report/
 
 The PDF is printed from HTML by Microsoft Edge in headless mode (no extra packages needed).
 """
@@ -14,6 +15,7 @@ import argparse
 import importlib
 import pickle
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +32,7 @@ SECTIONS = ["sec_a", "sec_b", "sec_c", "sec_d", "sec_e"]
 EDGE = [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
 TITLE = "Projecting, Simulating and Drafting: A Statistical Model for a 10-Team, 9-Category Head-to-Head Fantasy Basketball League"
 NAME = "NBA_Draft_Model_Report"
+REPO_COPY = ROOT / "docs" / "final_report"
 
 CSS = """
 @page { size: Letter; margin: 0.8in 0.75in; }
@@ -95,11 +98,26 @@ def main(only: str | None, pdf: bool) -> None:
     print(f"wrote {md_path} ({ctx.nfig} figures, {len(md.split()):,} words)")
     if pdf:
         to_pdf(html_path, common.OUT / f"{NAME}.pdf")
+    publish(include_pdf=pdf)
+
+
+def publish(include_pdf: bool = True) -> None:
+    """Copy the Markdown, the PDF and the figures into the repository (docs/final_report/) so the committed report always matches the last build."""
+    REPO_COPY.mkdir(parents=True, exist_ok=True)
+    names = [f"{NAME}.md"] + ([f"{NAME}.pdf"] if include_pdf else [])
+    for n in names:
+        shutil.copy2(common.OUT / n, REPO_COPY / n)
+    shutil.copytree(common.FIGS, REPO_COPY / "figures", dirs_exist_ok=True)
+    print(f"published {', '.join(names)} and {len(list(common.FIGS.glob('*.png')))} figures to {REPO_COPY}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", default=None)
     ap.add_argument("--no-pdf", action="store_true")
+    ap.add_argument("--publish-only", action="store_true", help="just copy the last build into docs/final_report/")
     a = ap.parse_args()
-    main(a.only, not a.no_pdf)
+    if a.publish_only:
+        publish()
+    else:
+        main(a.only, not a.no_pdf)
