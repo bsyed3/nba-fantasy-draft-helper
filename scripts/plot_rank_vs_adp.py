@@ -56,7 +56,7 @@ def match_to_model(adp: pd.DataFrame, proj: pd.DataFrame, team_abbr: dict[int, s
     return pd.DataFrame(rows), missing
 
 
-def main(xlsx: str, out: str, top: int = 150, n_label: int = 8) -> None:
+def main(xlsx: str, out: str, top: int = 150, n_label: int = 8, highlight: list[str] | None = None) -> None:
     from nba_api.stats.static import teams as static_teams
 
     proj = pd.read_parquet(ROOT / "data/processed/projections_2026.parquet")
@@ -80,10 +80,12 @@ def main(xlsx: str, out: str, top: int = 150, n_label: int = 8) -> None:
     print("model ranks him HIGHER than the market (drafted range):"); print(both[both["blend_order"] <= 150].nsmallest(12, "gap")[cols].round(1).to_string(index=False))
     print("model ranks him LOWER than the market (drafted range):"); print(both[both["blend_order"] <= 150].nlargest(14, "gap")[cols].round(1).to_string(index=False))
     both.drop(columns=["rank"]).rename(columns={"model_name": "player"}).to_csv(Path(out).with_suffix(".csv"), index=False)
-    draw(both, out, rho_d, drafted, int(d["placeholder"].sum()), top)
+    draw(both, out, rho_d, drafted, int(d["placeholder"].sum()), top, highlight=highlight)
 
 
-def draw(d: pd.DataFrame, out: str, rho: float, drafted: pd.DataFrame, n_placeholder: int, top: int, lim: int = 165, thresh: float = 30.0, n_label: int = 8) -> None:
+def draw(d: pd.DataFrame, out: str, rho: float, drafted: pd.DataFrame, n_placeholder: int, top: int, lim: int = 165, thresh: float = 30.0, n_label: int = 8,
+         highlight: list[str] | None = None) -> None:
+    highlight = highlight or []
     from src.reporting.analysis import short_name
 
     import matplotlib.pyplot as plt
@@ -133,6 +135,10 @@ def draw(d: pd.DataFrame, out: str, rho: float, drafted: pd.DataFrame, n_placeho
     g = inr[inr["model_name"].str.contains("Antetokounmpo")]
     if len(g):                                                           # the one you asked about, for reference
         labels.append((float(g["blend_order"].iloc[0]), float(g["model_rank"].iloc[0]), "Giannis", C["ink"]))
+    for full in highlight:                                               # any others you ask about, in black (unless already labelled)
+        h = inr[inr["model_name"] == full]
+        if len(h) and not any((lx, ly) == (float(h["blend_order"].iloc[0]), float(h["model_rank"].iloc[0])) for lx, ly, _, _ in labels):
+            labels.append((float(h["blend_order"].iloc[0]), float(h["model_rank"].iloc[0]), nm(full), C["ink"]))
 
     # side panel: the players that fall off the chart, with their real numbers
     side.axis("off"); side.grid(False)
@@ -163,6 +169,7 @@ if __name__ == "__main__":
     ap.add_argument("xlsx")
     ap.add_argument("--out", default=str(ROOT / "exports/rank_vs_adp.png"))
     ap.add_argument("--top", type=int, default=150)
+    ap.add_argument("--highlight", nargs="*", default=[], help="extra players to label in black, by full name as the model has it (e.g. \"Pascal Siakam\")")
     a = ap.parse_args()
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    main(a.xlsx, a.out, a.top)
+    main(a.xlsx, a.out, a.top, highlight=a.highlight)
