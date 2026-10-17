@@ -1,3 +1,4 @@
 *.db binary
 *.npz binary
 *.parquet binary
+*.bat text eol=crlf

@@ -33,6 +33,10 @@ python scripts/build_library.py          # 4. calibrate + simulate the season's 
 streamlit run src/app/streamlit_app.py   # 5. draft
 ```
 
+**Windows shortcut:** double-click `run_draft_helper.bat`. The first run creates `.venv` and installs the
+requirements (a few minutes); after that it just starts the app and opens your browser. The committed
+`data/processed/` files are enough to run the app, so steps 1-4 are only needed to refresh the data.
+
 Step 2 needs a network that can reach `lm-api-reads.fantasy.espn.com`. Without it the pipeline still runs, using
 an approximate eligibility derived from nba_api labels and assist/rebound rates (the app shows a warning until
 `positions.csv` exists). Re-run steps 3–4 after step 2.
