@@ -634,6 +634,24 @@ def rookie_profiles(st: pd.DataFrame, min_minutes: float = 200) -> tuple[pd.Data
 # Final projection
 # ---------------------------------------------------------------------------
 
+RECENT_MIN_MINUTES = 300.0     # a player with this many minutes last season belongs in the draft pool even if no roster lists him today
+
+
+def add_recent_players(players: pd.DataFrame, st: pd.DataFrame, target_year: int,
+                       min_minutes: float = RECENT_MIN_MINUTES) -> tuple[pd.DataFrame, set[int]]:
+    """
+    The projection pool is "on a current roster" (nba_api PlayerIndex, last_year >= target_year). That index lags: a free agent, or a
+    player who was signed or traded after the last data refresh, still shows last_year = target_year - 1 and would silently be missing
+    from the draft. Treat anyone with at least `min_minutes` in the last season as in the pool. Returns the players table with those
+    rows' last_year raised, and their ids (flagged in the projections as not currently rostered; the team shown is the last one known).
+    """
+    played = st[(st["year"] == target_year - 1) & (st["min"] >= min_minutes)]["player_id"]
+    stale = players["last_year"].eq(target_year - 1) & players["player_id"].isin(set(played))
+    out = players.copy()
+    out.loc[stale, "last_year"] = target_year
+    return out, set(int(p) for p in players.loc[stale, "player_id"])
+
+
 def project_season(st: pd.DataFrame, players: pd.DataFrame, target_year: int, selection: dict[str, str],
                    context: pd.DataFrame | None = None, ignore_seasons: pd.DataFrame | None = None,
                    no_context_ids: set[int] | None = None) -> pd.DataFrame:

@@ -318,6 +318,6 @@ Earlier evidence that it mattered: 22% of backtest player-seasons involved a tea
 ## 10. Quick orientation for a new session
 
 - Start with `docs/REPORT.md` §1 (summary), §10 (validation), §12 (limits), then this file's §6.1/§7. Then `src/draft/engine.py` (`DraftEngine.recommend`, `team_totals`, `evaluate`, `_bot_orders`) and `src/models/projection.py` (`predict_all`, `build_wide`, `feature_matrix`).
-- To check the app end-to-end headlessly: copy `data/processed/nba.db`, set `NBA_DB`, create a league with `store.save_league`, drive `AppTest` (string multiselect options only).
+- To check the app end-to-end headlessly: copy `data/processed/nba.db`, set `NBA_DB` (before `src.app.common` is imported), and drive `AppTest.from_string` with a small script that calls `common.load_context()` and one page's `render(ctx)` (e.g. `page_trades.render`); `at.selectbox(key=...).set_value(...)` takes raw option values, multiselect `.set_value([...])` likewise. The league row is created automatically.
 - Tests (37) cover: schema invariants, snake order/persistence, shrinkage math, projection pipeline on synthetic history, rookie/returning-veteran handling, simulation moments and constraints, daily-lineup slot rules, center cap, schedule/matchup-period logic (incl. the Cup/All-Star merges), ESPN parsing, and the recommender's candidate-pool options.
 - When changing models or the simulator, re-run: `build_projections.py` → `build_library.py` → `pytest -q` → (`validate_draft.py`) → `make_report.py`, restart the Streamlit server, and update this file's §6/§7/§8.

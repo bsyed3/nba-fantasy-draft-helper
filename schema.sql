@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS league (
     active_slots INTEGER NOT NULL,   -- players that count in a weekly matchup
     my_slot INTEGER NOT NULL,        -- 1-based first-round draft position
     max_centers INTEGER NOT NULL DEFAULT 3,  -- league rule: max centers on a roster
-    season TEXT NOT NULL
+    season TEXT NOT NULL,
+    team_names TEXT                  -- JSON list of the teams' names in draft-slot order (NULL = "Team 1", "Team 2", ...)
 );
 
 CREATE TABLE IF NOT EXISTS draft_pick (
@@ -141,6 +142,17 @@ CREATE TABLE IF NOT EXISTS draft_exclusion (
     league_id INTEGER NOT NULL REFERENCES league(league_id),
     player_id INTEGER NOT NULL REFERENCES player(player_id),
     PRIMARY KEY (league_id, player_id)
+);
+
+-- Roster moves after the draft (waiver / free-agent pickups, drops, injured reserve). The draft picks above stay as the
+-- record of the draft; a team's current roster is the picks with these moves applied in move_no order.
+CREATE TABLE IF NOT EXISTS roster_move (
+    league_id INTEGER NOT NULL REFERENCES league(league_id),
+    move_no INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_slot INTEGER NOT NULL,
+    player_id INTEGER NOT NULL REFERENCES player(player_id),
+    action TEXT NOT NULL CHECK (action IN ('add', 'drop', 'ir', 'activate')),
+    note TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_box_score_player ON box_score(player_id);

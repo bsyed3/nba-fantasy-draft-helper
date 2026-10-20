@@ -123,11 +123,16 @@ class DraftEngine:
     def _initial(self, state: DraftState):
         taken = np.zeros(len(self.pid), dtype=bool)
         rosters = {t: [] for t in range(1, self.settings.n_teams + 1)}
-        for _, t, p in state.picks:
+        for t, ids in state.rosters().items():                    # the picks with any post-draft roster moves applied
+            for p in ids:
+                i = self.idx_of.get(int(p))
+                if i is not None:
+                    taken[i] = True
+                    rosters[t].append(i)
+        for p in state.ir_ids():                                   # injured reserve: off the lineup but not available to anyone
             i = self.idx_of.get(int(p))
             if i is not None:
                 taken[i] = True
-                rosters[t].append(i)
         for p in state.excluded:
             i = self.idx_of.get(int(p))
             if i is not None:

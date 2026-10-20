@@ -47,8 +47,34 @@ class DraftState:
     picks: list[tuple[int, int, int]] = field(default_factory=list)  # (pick_no, team_slot, player_id)
     excluded: set[int] = field(default_factory=set)                   # flagged unavailable (injury etc.)
     centers: set[int] = field(default_factory=set)                    # player_ids that count toward the center cap
+    moves: list[tuple[int, int, str]] = field(default_factory=list)   # post-draft roster moves in order: (team_slot, player_id, action)
+    #   action: 'add' (pick up a free agent), 'drop' (release), 'ir' (move to the injured-reserve slot), 'activate' (back from IR)
 
     # --- derived -------------------------------------------------------
+    def _by_team(self) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+        """(active + bench, injured reserve) per team: the draft picks with the roster moves applied on top, in order."""
+        n = self.settings.n_teams
+        active = {t: [] for t in range(1, n + 1)}
+        ir = {t: [] for t in range(1, n + 1)}
+        for _, t, p in self.picks:
+            active[t].append(p)
+        on_a_roster = lambda p: any(p in v for v in active.values()) or any(p in v for v in ir.values())
+        for t, p, action in self.moves:
+            if action == "add":
+                if not on_a_roster(p):
+                    active[t].append(p)
+            elif action == "drop":
+                for lst in (active[t], ir[t]):
+                    if p in lst:
+                        lst.remove(p)
+            elif action == "ir":
+                if p in active[t]:
+                    active[t].remove(p); ir[t].append(p)
+            elif action == "activate":
+                if p in ir[t]:
+                    ir[t].remove(p); active[t].append(p)
+        return active, ir
+
     @property
     def next_pick_no(self) -> int:
         return len(self.picks) + 1
@@ -67,16 +93,31 @@ class DraftState:
 
     @property
     def drafted(self) -> set[int]:
-        return {p for _, _, p in self.picks}
+        """Everyone on a roster (active, bench or IR), i.e. not available to pick up: the draft picks with the roster moves applied."""
+        if not self.moves:
+            return {p for _, _, p in self.picks}
+        active, ir = self._by_team()
+        return {p for v in active.values() for p in v} | {p for v in ir.values() for p in v}
 
     def roster(self, slot: int) -> list[int]:
-        return [p for _, t, p in self.picks if t == slot]
+        """The team's active and bench players (not its injured reserve)."""
+        if not self.moves:
+            return [p for _, t, p in self.picks if t == slot]
+        return self._by_team()[0][slot]
 
     def rosters(self) -> dict[int, list[int]]:
-        out = {t: [] for t in range(1, self.settings.n_teams + 1)}
-        for _, t, p in self.picks:
-            out[t].append(p)
-        return out
+        if not self.moves:
+            out = {t: [] for t in range(1, self.settings.n_teams + 1)}
+            for _, t, p in self.picks:
+                out[t].append(p)
+            return out
+        return self._by_team()[0]
+
+    def ir(self, slot: int) -> list[int]:
+        return self._by_team()[1][slot] if self.moves else []
+
+    def ir_ids(self) -> set[int]:
+        return {p for v in self._by_team()[1].values() for p in v} if self.moves else set()
 
     def my_pick_numbers(self) -> list[int]:
         s = self.settings

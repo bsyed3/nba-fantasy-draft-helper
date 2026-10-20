@@ -30,7 +30,7 @@ python scripts/ingest.py                 # 1. box scores 2015-16..latest + the p
 python scripts/fetch_espn_positions.py   # 2. ESPN's exact position eligibility + ADP -> data/external/positions.csv
 python scripts/build_projections.py      # 3. backtest + 2026-27 projections
 python scripts/build_library.py          # 4. calibrate + simulate the season's real weeks, game by game (~40 s)
-streamlit run src/app/streamlit_app.py   # 5. draft
+streamlit run src/app/streamlit_app.py   # 5. the app: teams, free agents, trade evaluator, draft
 ```
 
 **Windows shortcut:** double-click `run_draft_helper.bat`. The first run creates `.venv` and installs the
@@ -41,12 +41,25 @@ Step 2 needs a network that can reach `lm-api-reads.fantasy.espn.com`. Without i
 an approximate eligibility derived from nba_api labels and assist/rebound rates (the app shows a warning until
 `positions.csv` exists). Re-run steps 3–4 after step 2.
 
-In the app: create a league in the sidebar (defaults are your ESPN league: 10 teams, 13 roster spots,
-10 active), set your draft slot, then **record every pick as it happens**. On your turn the Draft tab
-ranks the best available players by *simulated probability of winning a weekly matchup* if you take
-them. Flip "Plan my next pick" to look ahead while others are on the clock. Flag injured/out players on
-the Player board tab and they're excluded. Draft state is saved in SQLite after every pick, so
-refreshing or closing the app loses nothing; "Undo last pick" fixes entry mistakes.
+The app manages one league (your ESPN league: 10 teams, 13 roster spots, 10 active, 3-center cap). The league row
+is created automatically the first time it runs; there is no league picker. Four pages:
+
+- **Teams** - every team's projected weekly stats, category ranks, win % (regular season and playoff weeks) and
+  head-to-head matrix, from the simulated weeks; pick a team for its roster, lineup usage and week-by-week win %.
+- **Free agents** - the free-agent pool scored against my roster: for each free agent, the change in my weekly win
+  probability if I add him and drop my best-matching player, by category, plus who on my roster is adding the least and
+  a side-by-side comparison of any free agent with any of my players. Pickups, drops and injured-reserve moves for
+  any team are recorded at the bottom, so the pool and every projection stay current; "Undo" takes the last one back.
+- **Trade evaluator** - pick the players each team sends; both rosters are replayed through the simulated weeks and the
+  page shows each team's win probability and category effects before and after, how even the trade is on the draft
+  board's value, the effect on every other team, and whether the center cap is broken. A completed trade can be recorded.
+- **Draft** - **record every pick as it happens**. On your turn the Draft tab ranks the best available players by
+  *simulated probability of winning a weekly matchup* if you take them. Flip "Plan my next pick" to look ahead while
+  others are on the clock. Flag injured/out players on the Player board tab and they're excluded. "Undo last pick" fixes
+  entry mistakes. Once the draft is complete the app opens on the Teams page.
+
+All state (picks, roster moves, team names) is saved in SQLite as you go, so refreshing or closing the app loses nothing.
+To try things without touching your data, copy `data/processed/nba.db` and point `NBA_DB` at the copy.
 
 Re-running any script is safe (ingest skips seasons already loaded; `--refresh` re-pulls one).
 Before the draft, re-run ingest + the two build scripts to pick up late roster/rookie changes.
@@ -142,8 +155,9 @@ src/
   features/                 per-player-season table, shrinkage definitions, stints
   models/projection.py      Phase 1
   simulation/               calibration.py (learn from history), copula.py (simulate)
-  draft/                    state.py, store.py (persistence), values.py (z-board), engine.py, policy.py (category-aware picks), mock.py
-  app/streamlit_app.py      live draft UI
+  draft/                    state.py, store.py (persistence), values.py (z-board), engine.py, policy.py (category-aware picks), mock.py,
+                            season.py (league table, free-agent swaps, trade scoring)
+  app/                      Streamlit app: streamlit_app.py (navigation), common.py, page_teams / page_free_agents / page_trades / page_draft.py
 tests/                      pytest; synthetic data, no network needed
 docs/                       data model, methodology, validation, original investigation plan
 ```
@@ -152,7 +166,7 @@ Run the tests with `python -m pytest -q`.
 
 ## Open questions
 
-- **Draft rounds:** 13 (excluding IR) or 14? Change `roster_size` when creating the league if your draft has 14 rounds
+- **Draft rounds:** 13 (excluding IR) or 14? Change `roster_size` in the `league` table if your draft has 14 rounds
   (the extra pick is simply modelled as more bench depth).
 - **Center cap:** the app counts any **C-eligible** player (including PF/C types such as Wembanyama) toward the 3-center
   cap. If ESPN only counts players slotted/listed at C, say so and it's a one-line change (`is_center` in `features/positions.py`).

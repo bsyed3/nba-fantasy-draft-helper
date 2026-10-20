@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.stdout.reconfigure(encoding="utf-8")  # player names have accents; Windows consoles default to cp1252
 sys.path.insert(0, str(ROOT))
 
+from src.draft.league_rules import banned_player_ids
 from src.draft.values import z_scores
 from src.features.player_seasons import load_player_season_table
 from src.features.positions import add_eligibility
@@ -112,7 +113,8 @@ def reapply_overrides(out: Path, target_year: int) -> None:
     print(f"re-applied overrides and re-ranked {len(proj)} players -> {path}")
 
 
-def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_ctx: bool = True, overrides_only: bool = False) -> None:
+def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_ctx: bool = True, overrides_only: bool = False,
+         reuse_backtest: bool = False) -> None:
     out = Path(out_dir)
     if overrides_only:
         year = target_year or max(int(p.stem.split("_")[1]) for p in out.glob("projections_*.parquet"))
@@ -131,18 +133,26 @@ def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_c
         ctx = team_context(conn, list(range(int(st["year"].min()) + 1, target_year + 1)), current_team=cur_team,
                            absent_ids=known_absent_ids(ABSENCE_FILES, players))
         print(f"Team context: {len(ctx)} player-seasons ({int((ctx['year'] == target_year).sum())} for {target_year})")
-    print(f"Backtesting folds {fold_years} (train on everything before each)...")
-    bt = P.backtest(st, fold_years, context=ctx)
-    pd.set_option("display.width", 200)
-    print("\nOut-of-sample change in weighted MSE vs the shrunken-average baseline (negative = better):")
-    print(bt.summary.pivot(index="stat", columns="model", values="vs_baseline_pct").round(1).to_string())
-    print("\nSelected per stat:", bt.selection)
-    bt.summary.to_csv(out / "backtest_summary.csv", index=False)
-    bt.oos.to_parquet(out / "backtest_oos.parquet")
-    gp_q = P.fit_gp_quantiles(bt.avail_eval)
-    (out / "gp_quantiles.json").write_text(json.dumps({str(q): {"intercept": a, "slope": b} for q, (a, b) in gp_q.items()}, indent=2))
-    print("Typical-GP map (actual availability = a + b * projected mean availability, rotation players, backtest):",
-          {q: (round(a, 2), round(b, 2)) for q, (a, b) in gp_q.items()})
+    if reuse_backtest:
+        # the backtest does not depend on who is in the draft pool, so a pool change can reuse the saved model selection (minutes, not tens of minutes)
+        summ = pd.read_csv(out / "backtest_summary.csv")
+        selection = summ[summ["selected"]].set_index("stat")["model"].to_dict()
+        gp_q = {float(q): (v["intercept"], v["slope"]) for q, v in json.loads((out / "gp_quantiles.json").read_text()).items()}
+        print(f"Reusing the saved backtest (models selected per stat: {selection})")
+    else:
+        print(f"Backtesting folds {fold_years} (train on everything before each)...")
+        bt = P.backtest(st, fold_years, context=ctx)
+        pd.set_option("display.width", 200)
+        print("\nOut-of-sample change in weighted MSE vs the shrunken-average baseline (negative = better):")
+        print(bt.summary.pivot(index="stat", columns="model", values="vs_baseline_pct").round(1).to_string())
+        print("\nSelected per stat:", bt.selection)
+        bt.summary.to_csv(out / "backtest_summary.csv", index=False)
+        bt.oos.to_parquet(out / "backtest_oos.parquet")
+        selection = bt.selection
+        gp_q = P.fit_gp_quantiles(bt.avail_eval)
+        (out / "gp_quantiles.json").write_text(json.dumps({str(q): {"intercept": a, "slope": b} for q, (a, b) in gp_q.items()}, indent=2))
+        print("Typical-GP map (actual availability = a + b * projected mean availability, rotation players, backtest):",
+              {q: (round(a, 2), round(b, 2)) for q, (a, b) in gp_q.items()})
 
     means, cvs = P.rookie_profiles(st)
     rp = means.add_prefix("mean_").join(cvs.add_prefix("cv_"))
@@ -162,7 +172,15 @@ def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_c
         nc = pd.read_csv(nc_path)
         no_ctx = set(int(p) for p in nc["player_id"])
         print(f"  no team-context adjustment for: " + ", ".join(nc["name"]))
-    proj = P.project_season(st, players, target_year, bt.selection, context=ctx, ignore_seasons=ignore, no_context_ids=no_ctx)
+    players, recent_ids = P.add_recent_players(players, st, target_year)         # free agents / players the roster index has not caught up with
+    print(f"  {len(recent_ids)} players with {P.RECENT_MIN_MINUTES:.0f}+ minutes last season are on no current roster: added to the pool (flagged not_rostered)")
+    banned = banned_player_ids()                                                # players the league does not allow: not in the pool at all
+    if banned:
+        print(f"  banned by the league (data/external/banned_players.csv), left out of the pool: {', '.join(players.loc[players['player_id'].isin(banned), 'name'])}")
+        players = players[~players["player_id"].isin(banned)]
+        recent_ids -= banned
+    proj = P.project_season(st, players, target_year, selection, context=ctx, ignore_seasons=ignore, no_context_ids=no_ctx)
+    proj["not_rostered"] = proj["player_id"].isin(recent_ids)
     rk_path = ROOT / "data/external/rookie_projections_yahoo.csv"   # outside rookie projections replace the draft-slot profile
     if rk_path.exists():
         proj = P.apply_external_rookies(proj, pd.read_csv(rk_path))
@@ -193,5 +211,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-team-context", action="store_true", help="project from each player's own history only (the model before team context)")
     ap.add_argument("--overrides-only", action="store_true",
                     help="only re-apply data/external/projection_overrides.csv to the saved projections and re-rank (seconds; no backtest)")
+    ap.add_argument("--reuse-backtest", action="store_true",
+                    help="skip the walk-forward backtest and reuse the saved model selection (backtest_summary.csv, gp_quantiles.json); "
+                         "re-projects every player, e.g. after changing the player pool")
     a = ap.parse_args()
-    main(a.db_path, a.target_year, a.folds, a.out_dir, team_ctx=not a.no_team_context, overrides_only=a.overrides_only)
+    main(a.db_path, a.target_year, a.folds, a.out_dir, team_ctx=not a.no_team_context, overrides_only=a.overrides_only, reuse_backtest=a.reuse_backtest)

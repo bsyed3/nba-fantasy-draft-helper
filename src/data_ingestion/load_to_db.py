@@ -44,7 +44,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     """Add columns introduced after a database was first created (CREATE IF NOT EXISTS won't)."""
     wanted = {
         "player": {"team_id": "INTEGER", "rookie_year": "INTEGER", "last_year": "INTEGER"},
-        "league": {"max_centers": "INTEGER NOT NULL DEFAULT 3"},
+        "league": {"max_centers": "INTEGER NOT NULL DEFAULT 3", "team_names": "TEXT"},
     }
     for table, cols in wanted.items():
         have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
