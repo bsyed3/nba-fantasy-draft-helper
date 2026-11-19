@@ -1,2 +1,3 @@
-player_id,name,games_out,note
-204001,Kristaps Porziņģis,82,"user instruction 2026-10-14: treat as missing the whole season (ESPN lists him Day-To-Day, 'undisclosed', away from the team); 2026-11-10: user says he retired, so out for the season (ESPN now lists Jan 2)"
+player_id,name,games_out,return_date,note
+204001,Kristaps Porziņģis,82,,"user instruction 2026-10-14: treat as missing the whole season (ESPN lists him Day-To-Day, 'undisclosed', away from the team); 2026-11-10: user says he retired, so out for the season (ESPN now lists Jan 2)"
+1627749,Dejounte Murray,34,2026-12-31,user 2026-11-19: assume out until Dec 31 unless told otherwise (ESPN lists Nov 20)
