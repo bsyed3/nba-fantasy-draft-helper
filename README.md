@@ -132,6 +132,10 @@ Put `leagueID`, `SWID` and `espn_s2` (from the browser cookies while logged in t
 re-sign it, in which case the script stops and says so (use a phone hotspot, then `--offline` re-runs from the cached download anywhere). `--dry-run` writes nothing; `--skip` leaves steps out;
 `--backup` copies `nba.db` first (off by default). The raw download lives in the gitignored `data/espn_cache/`. After a positions change, rerun `build_projections.py --reuse-backtest` and `build_library.py`.
 
+**Projecting the week:** `python scripts/project_week.py` simulates the rest of the current matchup period (20,000 games-by-game runs from ESPN's banked totals, the NBA schedule, each team's best ten
+healthy players per day) and prints, for every matchup, each category's win chance, the chance of each final score and the chance to win the week. `--refresh` downloads a fresh ESPN copy first (same network checks
+as the sync), `--next` (or `--week 7`) projects a future week in full, `--team Bilal` shows one matchup, `--from YYYY-MM-DD` sets the first day still to be played (ESPN's totals only include finished days, so run it before tonight's games or pass tomorrow's date).
+
 Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id` or `name`, plus any of
 `mpg, avail, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov` per game) next to the DB and
 `build_projections.py` will apply them — e.g. to anchor a rookie to a source you trust. Overriding `mpg` also rescales the
@@ -166,6 +170,8 @@ scripts/
   fetch_espn_injuries.py    ESPN injuries page -> data/external/known_absences.csv
   fetch_live_stats.py       this season's box scores so far -> data/processed/live_<year>.db (kept apart from nba.db)
   sync_espn.py              your ESPN league (read-only): rosters, positions, matchups, standings, transactions, players
+  project_week.py           projects the rest of this week's matchups from ESPN's current totals: chance to win each category, each final score, the week
+  project_season.py         the same engine over every remaining regular-season week: each team's expected final record with a 90% range, top-6 chance, every matchup, then the playoffs (bye, semifinal, final and title odds)
   build_library.py          Phase 2: calibrate + simulate the season's real weeks
   validate_draft.py         end-to-end out-of-sample validation on past seasons
   make_report.py            regenerates docs/REPORT.md + REPORT.html with all figures

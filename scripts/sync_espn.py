@@ -232,7 +232,7 @@ def load_cache(folder: Path) -> dict:
 class Context:
     """nba.db rosters + names, the ESPN <-> nba.db player match, and the ESPN team id -> draft slot match."""
 
-    def __init__(self, data: dict, db: Path, force: bool):
+    def __init__(self, data: dict, db: Path, force: bool, verbose: bool = True):
         self.data = data
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         self.state = store.load_state(conn, LEAGUE)
@@ -260,11 +260,12 @@ class Context:
         rows, cols = linear_sum_assignment(-overlap)                                          # best one-to-one match of ESPN teams to draft slots
         self.slot_of = {self.teams[r]["id"]: int(c) + 1 for r, c in zip(rows, cols)}
         self.team_by_id = {t["id"]: t for t in self.teams}
-        print("ESPN team -> draft slot (matched by roster overlap):")
-        for r, c in zip(rows, cols):
-            t = self.teams[r]
-            flag = "" if overlap[r, c] >= 8 else "   <-- LOW OVERLAP"
-            print(f"  '{t['name']}' -> {c + 1} {self.names[c]}  (shared {overlap[r, c]} of {len(t['a_ids'] | t['i_ids'])}){flag}")
+        if verbose:
+            print("ESPN team -> draft slot (matched by roster overlap):")
+            for r, c in zip(rows, cols):
+                t = self.teams[r]
+                flag = "" if overlap[r, c] >= 8 else "   <-- LOW OVERLAP"
+                print(f"  '{t['name']}' -> {c + 1} {self.names[c]}  (shared {overlap[r, c]} of {len(t['a_ids'] | t['i_ids'])}){flag}")
         self.low_overlap = bool((overlap[rows, cols] < 8).any())
         if self.low_overlap and not force:
             sys.exit("Team matching looks wrong (a team shares fewer than 8 players with its draft slot). Nothing was changed; re-run with --force only if you are sure.")
