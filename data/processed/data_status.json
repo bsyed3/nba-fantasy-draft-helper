@@ -1,0 +1,17 @@
+{
+  "injuries": {
+    "at": "2026-11-19T10:39:27",
+    "listings": 102,
+    "out": 73
+  },
+  "projections": {
+    "at": "2026-11-19T11:21:31",
+    "players": 646,
+    "target_year": 2026
+  },
+  "library": {
+    "at": "2026-11-19T11:22:29",
+    "year": 2026,
+    "sims_per_week": 40
+  }
+}
