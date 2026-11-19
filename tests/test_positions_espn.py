@@ -29,6 +29,18 @@ def test_espn_file_overrides_heuristic_and_supplies_adp(tmp_path):
     assert parse_eligibility("pg / sg, G, UTIL") == {"PG", "SG"}
 
 
+def test_center_limit_counts_primary_position_only(tmp_path):
+    proj = pd.DataFrame({"player_id": [1, 2, 3, 4, 5], "name": ["Real C", "PF who can play C", "ESPN C-only", "Override C", "Not in file"],
+                         "position_1": ["C", "C", "F", "F", "C"], "position_2": ["F", "F", None, "C", None], "r_ast": [3.0] * 5, "r_reb": [10.0] * 5})
+    f = tmp_path / "positions.csv"
+    pd.DataFrame({"player_id": [1, 2, 3, 4], "name": proj["name"][:4], "eligibility": ["C,PF", "PF,C", "C", "PF,C"],
+                  "primary": [None, None, None, "C"]}).to_csv(f, index=False)
+    out = add_eligibility(proj, f)
+    assert out["e_C"].tolist() == [True] * 5                                # all may fill the C slot
+    assert out["primary"].tolist() == ["C", "PF", "C", "C", "C"]            # ESPN's first-listed position, unless `primary` says otherwise
+    assert out["is_center"].tolist() == [True, False, True, True, True]     # only primary-C count toward the limit (row 2: ESPN lists PF first even though the NBA lists C)
+
+
 def test_parse_espn_payload_and_name_matching():
     payload = {"players": [
         {"player": {"fullName": "Nikola Jokić", "eligibleSlots": [4, 9, 10, 11, 12, 13], "ownership": {"averageDraftPosition": 2.1}}},

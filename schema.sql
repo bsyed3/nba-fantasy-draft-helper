@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS league (
     roster_size INTEGER NOT NULL,
     active_slots INTEGER NOT NULL,   -- players that count in a weekly matchup
     my_slot INTEGER NOT NULL,        -- 1-based first-round draft position
-    max_centers INTEGER NOT NULL DEFAULT 3,  -- league rule: max centers on a roster
+    max_centers INTEGER NOT NULL DEFAULT 4,  -- league rule: max centers on a roster
     season TEXT NOT NULL,
     team_names TEXT                  -- JSON list of the teams' names in draft-slot order (NULL = "Team 1", "Team 2", ...)
 );

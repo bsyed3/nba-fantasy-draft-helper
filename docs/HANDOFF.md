@@ -11,7 +11,7 @@ A live-draft assistant for **one specific league**, plus the whole pipeline behi
 
 - **League:** ESPN · snake draft · **10 teams** · 9-category head-to-head where each **weekly matchup is a single W/L**
   (more than 4.5 categories wins; margin and category count don't matter beyond that). 18 regular-season weeks + 3 playoff weeks.
-- **Lineups are set daily.** Slots: PG, SG, G, SF, PF, F, C, 3 UTIL (10 active) + 3 bench + 1 IR. **Max 3 centers** per roster.
+- **Lineups are set daily.** Slots: PG, SG, G, SF, PF, F, C, 3 UTIL (10 active) + 3 bench + 1 IR. **Max 4 centers** per roster (primary position C only).
   Default draft = 13 rounds (IR not drafted) — *unconfirmed*.
 - **Calendar (2026-27):** matchup periods are Mon–Sun weeks except **week 7 = Nov 30–Dec 13** (NBA Cup week, two weeks) and
   **week 17 = Feb 15–28** (All-Star, two weeks). Week 18 = Mar 1–7 ends the regular season; playoff weeks 19–21 = Mar 8–28.

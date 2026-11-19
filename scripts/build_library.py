@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
+from src.data_ingestion import data_status
 from src.simulation.calibration import Calibration, calibrate
 from src.simulation.copula import build_library
 from src.simulation.schedule import season_periods
@@ -70,6 +71,7 @@ def main(db_path: str, year: int | None, sims: int, seed: int, out_dir: str, pla
         lib = build_library(proj, cal, sched, sims_per_week=sims, seed=seed)
         lib.save(out / f"library_{year}.npz")
         print(f"  saved {out / f'library_{year}.npz'} ({lib.stats.nbytes / 1e6:.0f} MB uncompressed)")
+        data_status.record("library", out_dir=out, year=year, sims_per_week=sims)
     if policy_sims:
         # the category-aware pick policy searches many more simulated weeks than the engine's library holds; it only needs weekly totals
         from src.draft.policy import POLICY_SEED, save_weeks

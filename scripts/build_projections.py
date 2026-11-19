@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.stdout.reconfigure(encoding="utf-8")  # player names have accents; Windows consoles default to cp1252
 sys.path.insert(0, str(ROOT))
 
+from src.data_ingestion import data_status
 from src.draft.league_rules import banned_player_ids
 from src.draft.values import z_scores
 from src.features.player_seasons import load_player_season_table
@@ -200,6 +201,7 @@ def main(db_path: str, target_year: int | None, folds: int, out_dir: str, team_c
             "stl", "blk", "fg_pct", "ft_pct", "tov", "z_total"]
     print(proj[cols].head(40).round(2).to_string(index=False))
     print(f"\n{len(proj)} players projected -> {out}/projections_{target_year}.parquet")
+    data_status.record("projections", out_dir=out, players=len(proj), target_year=target_year)
 
 
 if __name__ == "__main__":

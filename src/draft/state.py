@@ -21,7 +21,7 @@ class LeagueSettings:
     roster_size: int = 13        # drafted players: 10 active + 3 bench (the IR slot is not drafted -- see docs)
     active_slots: int = 10       # PG SG G SF PF F C + 3 UTIL, set daily
     my_slot: int = 1             # 1-based first-round position
-    max_centers: int = 3         # league rule: at most this many centers on a roster
+    max_centers: int = 4         # league rule: at most this many centers on a roster
     season: str = "2026-27"
     reg_season_weeks: int = 18
     playoff_weeks: int = 3

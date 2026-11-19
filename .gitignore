@@ -19,3 +19,6 @@ venv/
 
 # Secrets
 .env
+
+# Raw ESPN league downloads (other managers names/ids); the derived tables are what gets committed
+data/espn_cache/

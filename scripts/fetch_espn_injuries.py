@@ -28,7 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
+from src.data_ingestion import data_status
 from src.data_ingestion import espn_injuries as E
+
+DEFAULT_OUT = ROOT / "data/external/known_absences.csv"
 
 
 def main(db_path: str, html: str | None, rows_json: str | None, statuses: list[str], season: str, today: dt.date, out: str) -> None:
@@ -47,6 +50,8 @@ def main(db_path: str, html: str | None, rows_json: str | None, statuses: list[s
     print(table.to_string(index=False))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(out, index=False)
+    if Path(out).resolve() == DEFAULT_OUT.resolve():                    # a trial run written elsewhere is not the app's injury list
+        data_status.record("injuries", listings=len(listings), out=len(table))
     print(f"\nwrote {len(table)} known absences -> {out}\nNext: python scripts/build_projections.py && python scripts/build_library.py")
 
 
@@ -58,6 +63,6 @@ if __name__ == "__main__":
     ap.add_argument("--status", nargs="+", default=["Out"], help="statuses to keep (default: Out)")
     ap.add_argument("--season", default="2026-27")
     ap.add_argument("--today", type=dt.date.fromisoformat, default=dt.date.today(), help="YYYY-MM-DD; dates on the page are resolved relative to it")
-    ap.add_argument("--out", default=str(ROOT / "data/external/known_absences.csv"))
+    ap.add_argument("--out", default=str(DEFAULT_OUT))
     a = ap.parse_args()
     main(a.db_path, a.html, a.rows_json, a.status, a.season, a.today, a.out)

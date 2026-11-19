@@ -114,10 +114,10 @@ def render(ctx: Ctx) -> None:
             else:
                 plan = state.my_turn or st.toggle("Plan my next pick (simulate bots up to it)", value=False)
                 if plan:
-                    policy = get_policy(engine, S)
+                    policy = get_policy(engine, S, ctx.stamp)
                     pol_pick, pol_table = policy.plan(state)
                     extra = set(watch) | ({pol_pick} if pol_pick is not None else set())     # the policy's pick must be in the table
-                    rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), max_rank, rollouts, tuple(sorted(extra)), tuple(state.moves))
+                    rec = cached_recommend(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), max_rank, rollouts, tuple(sorted(extra)), tuple(state.moves), ctx.stamp)
                     if rec.empty:
                         st.write("Nothing to evaluate.")
                     else:
@@ -192,7 +192,7 @@ def render(ctx: Ctx) -> None:
         if state.ir(S.my_slot):
             st.caption("Injured reserve: " + ", ".join(player_name(i) for i in state.ir(S.my_slot)))
         if mine and not state.done:
-            ev, _ = cached_outlook(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), tuple(state.moves))
+            ev, _ = cached_outlook(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), tuple(state.moves), ctx.stamp)
             me = S.my_slot - 1
             st.subheader("Projected outlook")
             st.caption("Rest of the draft filled in by the mock-draft model.")
@@ -206,7 +206,7 @@ def render(ctx: Ctx) -> None:
     with tab_league:
         if state.done:
             st.write("Draft complete -- final rosters below.")
-        ev, rosters = cached_outlook(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), tuple(state.moves))
+        ev, rosters = cached_outlook(engine, S, tuple(state.picks), tuple(sorted(state.excluded)), tuple(state.moves), ctx.stamp)
         rows = []
         for t in range(1, S.n_teams + 1):
             drafted_now = state.roster(t)

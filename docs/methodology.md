@@ -7,7 +7,7 @@ How each phase works, why, and what it deliberately leaves out. Numbers below co
 
 ESPN, 10 teams, snake, 13 drafted players. 9 categories: PTS, 3PM, REB, AST, STL, BLK, FG%, FT%, TO (lower
 wins). Each week is one matchup: win if you take more than 4.5 categories (ties split). Lineups are set
-daily with slots PG SG G SF PF F C UTIL×3 (10 active), 3 bench, 1 IR; at most 3 centers per roster. The
+daily with slots PG SG G SF PF F C UTIL×3 (10 active), 3 bench, 1 IR; at most 4 centers per roster (primary position C only). The
 season is 18 regular-season weeks + 3 playoff weeks.
 
 ## Data (SQLite, `schema.sql`)

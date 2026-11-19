@@ -5,7 +5,7 @@ week is a single matchup win/loss (category wins only matter for deciding the we
 18 regular-season weeks + 3 playoff weeks).
 
 League rules it models: lineups set **daily**; slots PG, SG, G, SF, PF, F, C, 3 UTIL (10 active), 3 bench,
-1 IR; **max 3 centers** per roster. The IR slot isn't drafted — the app assumes 13 draft rounds (see
+1 IR; **max 4 centers** per roster (only a player's primary position counts: ESPN's default position, so Chet and Bam Adebayo are centers even though ESPN also lists them at PF). The IR slot isn't drafted — the app assumes 13 draft rounds (see
 "Open questions" below).
 
 Three separate problems, solved separately:
@@ -116,6 +116,22 @@ to include day-to-day listings) -- then re-run `build_projections.py` + `build_l
 in `data/external/known_absences_manual.csv` (same columns; applied after the ESPN file, so it wins, and never overwritten). Without either, everyone is
 projected as active on opening night. `python scripts/export_projections.py` writes every player's projected stats to one Excel workbook.
 
+**Refreshing during the season:** `python scripts/fetch_espn_injuries.py && python scripts/build_projections.py --reuse-backtest && python scripts/build_library.py`
+(about two minutes). The app notices the new files on the next click (its caches are keyed on the files' modification times), so it does not need a restart. `games_out` counts team games before the return date from the
+season opener, so a player already hurt for a week is still handled correctly for the weeks ahead. The sidebar's **Data freshness** box shows how far the game stats run, when the ESPN injury list was fetched and when the projections were built (`data/processed/data_status.json`, written by `fetch_espn_injuries.py`, `build_projections.py` and `build_library.py`).
+
+**Live stats:** `python scripts/fetch_live_stats.py` pulls every box score of the season so far from nba_api into `data/processed/live_2026.db`
+(`live_game`, `live_box_score`, and the `live_player_week` view of per-player totals by fantasy matchup week). It is a separate file on purpose: `build_projections.py` targets
+"the season after the latest one with box scores" and `season_periods` treats a season with box scores as already played, so loading live games into `nba.db` would silently
+make the next rebuild project the wrong season. Nothing reads the live database yet.
+
+**Syncing with your ESPN league:** `python scripts/sync_espn.py` (use the project's `.venv`) checks the network itself, downloads your league read-only and then
+brings the tool up to date: it records any roster differences as moves in `nba.db`, writes ESPN's eligibility and primary (default) position to `data/external/positions.csv`,
+and writes the matchup, standings, transaction and player tables `data/external/espn_*.csv` and `matchup_results.csv`, printing the standings, your live matchup and the free agents on the rise.
+Put `leagueID`, `SWID` and `espn_s2` (from the browser cookies while logged in to ESPN) in a gitignored `.env`. ESPN's fantasy site must be reachable with a normal certificate: some work networks
+re-sign it, in which case the script stops and says so (use a phone hotspot, then `--offline` re-runs from the cached download anywhere). `--dry-run` writes nothing; `--skip` leaves steps out;
+`--backup` copies `nba.db` first (off by default). The raw download lives in the gitignored `data/espn_cache/`. After a positions change, rerun `build_projections.py --reuse-backtest` and `build_library.py`.
+
 Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id` or `name`, plus any of
 `mpg, avail, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov` per game) next to the DB and
 `build_projections.py` will apply them — e.g. to anchor a rookie to a source you trust. Overriding `mpg` also rescales the
@@ -147,6 +163,9 @@ scripts/
   ingest.py                 nba_api -> nba.db (multi-season, idempotent)
   build_projections.py      Phase 1: backtest + projections (+ rookie profiles, residuals)
   fetch_espn_positions.py   ESPN position eligibility + ADP -> data/external/positions.csv
+  fetch_espn_injuries.py    ESPN injuries page -> data/external/known_absences.csv
+  fetch_live_stats.py       this season's box scores so far -> data/processed/live_<year>.db (kept apart from nba.db)
+  sync_espn.py              your ESPN league (read-only): rosters, positions, matchups, standings, transactions, players
   build_library.py          Phase 2: calibrate + simulate the season's real weeks
   validate_draft.py         end-to-end out-of-sample validation on past seasons
   make_report.py            regenerates docs/REPORT.md + REPORT.html with all figures

@@ -10,7 +10,10 @@ slots. Anything here can be replaced with exact ESPN eligibility via
 `eligibility` like "PG,SG"), which always wins.
 
 Flex slots are derived, not stored: G accepts PG/SG, F accepts SF/PF,
-UTIL accepts anyone. "Center" for the roster cap = C-eligible.
+UTIL accepts anyone. "Center" for the roster cap = primary position C only. positions.csv carries a
+`primary` column (ESPN's default position, written by scripts/sync_espn.py: a "PF,C" whose default
+position is C counts, one whose default is PF does not); without that column the first position in
+`eligibility` is taken, and players ESPN did not list use a heuristic (NBA's first-listed position).
 """
 from __future__ import annotations
 
@@ -51,6 +54,22 @@ def parse_eligibility(text: str) -> set[str]:
     return {t.strip().upper() for t in str(text).replace("/", ",").split(",") if t.strip().upper() in SLOTS}
 
 
+def first_position(text: str) -> str | None:
+    """The first slot named in an eligibility string, in the order written: ESPN's list is primary, secondary, tertiary ("PF,C" is a PF)."""
+    return next((t.strip().upper() for t in str(text).replace("/", ",").split(",") if t.strip().upper() in SLOTS), None)
+
+
+def default_primary(pos1: str | None, e: set[str]) -> str:
+    """
+    Primary position for a player ESPN did not list (heuristic eligibility only): C if the NBA lists C first or he is C-only,
+    otherwise the first non-C slot he is eligible at. Only the primary position counts toward the league's center limit.
+    """
+    if "C" in e and (pos1 == "C" or e == {"C"}):
+        return "C"
+    rest = [s for s in SLOTS if s in e and s != "C"]
+    return rest[0] if rest else "C"
+
+
 def add_eligibility(proj: pd.DataFrame, overrides_path: str | Path | None = None) -> pd.DataFrame:
     """
     Adds `elig` ("PG/SG"), `elig_source` ("espn" | "heuristic"), `is_center`, one bool column per
@@ -61,6 +80,7 @@ def add_eligibility(proj: pd.DataFrame, overrides_path: str | Path | None = None
     sets = [default_eligibility(a, b, ast, reb) for a, b, ast, reb in
             zip(out["position_1"], out["position_2"], out["r_ast"], out["r_reb"])]
     src = ["heuristic"] * len(out)
+    explicit_primary: dict[int, str] = {}
     adp = pd.Series(np.nan, index=out.index, dtype=float)
     if overrides_path and Path(overrides_path).exists():
         ov = pd.read_csv(overrides_path)
@@ -79,12 +99,16 @@ def add_eligibility(proj: pd.DataFrame, overrides_path: str | Path | None = None
                 continue
             if elig_col and parse_eligibility(r[elig_col]):
                 sets[i], src[i] = parse_eligibility(r[elig_col]), "espn"
+                explicit_primary[i] = first_position(r[elig_col])               # ESPN lists the primary position first
             if "espn_adp" in ov and pd.notna(r.get("espn_adp")):
                 adp.iloc[i] = float(r["espn_adp"])
+            if "primary" in ov and str(r.get("primary", "")).strip().upper() in SLOTS:
+                explicit_primary[i] = str(r["primary"]).strip().upper()
     out["elig"] = ["/".join(s for s in SLOTS if s in e) for e in sets]
     out["elig_source"] = src
     out["espn_adp"] = adp.to_numpy()
     for s in SLOTS:
         out[f"e_{s}"] = [s in e for e in sets]
-    out["is_center"] = out["e_C"]
+    out["primary"] = [explicit_primary.get(i) or default_primary(p1, e) for i, (p1, e) in enumerate(zip(out["position_1"], sets))]
+    out["is_center"] = out["primary"] == "C"            # the league's center limit counts primary position only; e_C still decides who may fill the C slot
     return out

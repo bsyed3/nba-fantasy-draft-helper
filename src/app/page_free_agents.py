@@ -19,8 +19,8 @@ ACTIONS = {"add": "added", "drop": "dropped", "ir": "to IR", "activate": "off IR
 
 
 @st.cache_data(show_spinner="Scoring each free agent against each of my players...")
-def _grid(_engine, settings: LeagueSettings, rosters: tuple, me: int, adds: tuple, with_open: bool, _opp) -> season.SwapGrid:
-    """Swap grid for my team; `rosters` (every team's roster) only keys the cache, since it fixes the opponents too."""
+def _grid(_engine, settings: LeagueSettings, rosters: tuple, me: int, adds: tuple, with_open: bool, _opp, stamp: tuple) -> season.SwapGrid:
+    """Swap grid for my team; `rosters` (every team's roster) and `stamp` (the data files) only key the cache, since they fix the opponents and the simulated weeks."""
     roster = list(dict(rosters)[me])
     return season.swap_grid(_engine, roster, _opp, list(adds), roster + ([None] if with_open else []), settings.max_centers)
 
@@ -73,7 +73,7 @@ def render(ctx: Ctx) -> None:
     n_eval = c3.slider("Score the top N free agents", 10, n_top, min(100, n_top), 10,
                        help="Each one is tried against each of my players. About 15 seconds the first time for 100, then it is remembered until a roster changes.")
     adds_idx = [engine.idx_of[int(p)] for p in pool["player_id"].head(n_eval)]
-    grid = _grid(engine, S, key, me, tuple(adds_idx), open_slot, opp)
+    grid = _grid(engine, S, key, me, tuple(adds_idx), open_slot, opp, ctx.stamp)
     best = grid.best()
     info = ctx.proj_by_id.loc[[ctx.pid(i) for i in best["add"]]]
     df = pd.DataFrame({

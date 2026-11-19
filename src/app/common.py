@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.data_ingestion import data_status
 from src.draft import season, store
 from src.draft.engine import DraftEngine
 from src.draft.league_rules import banned_player_ids
@@ -46,8 +47,14 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def data_stamp() -> tuple:
+    """Modification times of the projections, simulation library and policy table. Every cached function below takes it, so a rebuild of
+    those files is picked up on the next click instead of waiting for the app to be restarted."""
+    return tuple((p.name, p.stat().st_mtime_ns) for pat in ("projections_*.parquet", "library_*.npz", "policy_weeks_*.npz") for p in sorted(DATA.glob(pat)))
+
+
 @st.cache_resource
-def load_data():
+def load_data(stamp: tuple):
     years = sorted(int(p.stem.split("_")[1]) for p in DATA.glob("library_*.npz"))
     if not years:
         return None
@@ -76,12 +83,12 @@ def load_data():
 
 
 @st.cache_resource
-def get_engine(_proj, _lib, settings: LeagueSettings) -> DraftEngine:
+def get_engine(_proj, _lib, settings: LeagueSettings, stamp: tuple) -> DraftEngine:
     return DraftEngine(_lib, _proj, settings)
 
 
 @st.cache_resource
-def get_policy(_engine: DraftEngine, settings: LeagueSettings) -> AdaptivePolicy:
+def get_policy(_engine: DraftEngine, settings: LeagueSettings, stamp: tuple) -> AdaptivePolicy:
     """The category-aware policy, searching the 200-draws-per-week table built by scripts/build_library.py when it exists
     (it was tested to pick better than the engine library's 40 draws), else the engine's own library."""
     years = sorted(int(p.stem.split("_")[1]) for p in DATA.glob("library_*.npz"))
@@ -91,13 +98,13 @@ def get_policy(_engine: DraftEngine, settings: LeagueSettings) -> AdaptivePolicy
 
 @st.cache_data(show_spinner="Simulating the rest of the draft...")
 def cached_recommend(_engine: DraftEngine, settings: LeagueSettings, picks: tuple, excluded: tuple,
-                     max_rank: int, rollouts: int, extra: tuple = (), moves: tuple = ()) -> pd.DataFrame:
+                     max_rank: int, rollouts: int, extra: tuple = (), moves: tuple = (), stamp: tuple = ()) -> pd.DataFrame:
     state = DraftState(settings, list(picks), set(excluded), set(_engine.center_ids), moves=list(moves))
     return _engine.recommend(state, rollouts=rollouts, pergame_k=10, extra_candidates=list(extra), max_rank=max_rank)
 
 
 @st.cache_data(show_spinner="Projecting every team...")
-def cached_outlook(_engine: DraftEngine, settings: LeagueSettings, picks: tuple, excluded: tuple, moves: tuple = ()):
+def cached_outlook(_engine: DraftEngine, settings: LeagueSettings, picks: tuple, excluded: tuple, moves: tuple = (), stamp: tuple = ()):
     state = DraftState(settings, list(picks), set(excluded), set(_engine.center_ids), moves=list(moves))
     ev, rosters = _engine.projected_outcome(state)
     return ev, rosters
@@ -118,7 +125,7 @@ def cached_period_weeks(_conn, season_name: str, n_regular: int, n_playoff: int)
 
 
 @st.cache_data(show_spinner="Scoring every team on the simulated weeks...")
-def cached_league_table(_engine: DraftEngine, settings: LeagueSettings, rosters: tuple, weeks: tuple | None = None):
+def cached_league_table(_engine: DraftEngine, settings: LeagueSettings, rosters: tuple, weeks: tuple | None = None, stamp: tuple = ()):
     """The projected league table for the rosters given as ((slot, (player index, ...)), ...)."""
     return season.league_table(_engine, {t: list(r) for t, r in rosters}, settings.reg_season_weeks + settings.playoff_weeks,
                                settings.reg_season_weeks, None if weeks is None else np.array(weeks))
@@ -142,6 +149,7 @@ class Ctx:
     S: LeagueSettings
     engine: DraftEngine
     team_names: list[str]
+    stamp: tuple = ()          # data_stamp() when this page was built: part of every cache key
 
     @property
     def me(self) -> int:
@@ -192,7 +200,7 @@ class Ctx:
     def league_table(self, rosters: dict[int, list[int]] | None = None) -> season.LeagueTable:
         rosters = self.rosters_idx() if rosters is None else rosters
         w = cached_period_weeks(self.conn, self.S.season, self.S.reg_season_weeks, self.S.playoff_weeks)
-        return cached_league_table(self.engine, self.S, rosters_key(rosters), None if w is None else tuple(float(x) for x in w))
+        return cached_league_table(self.engine, self.S, rosters_key(rosters), None if w is None else tuple(float(x) for x in w), self.stamp)
 
 
 def cat_columns() -> dict:
@@ -232,8 +240,32 @@ def shade(df: pd.DataFrame, cols: list[str], low: float, high: float, reverse: b
     return shade_multi(df, [(cols, low, high, reverse, df[cols] if basis is None else basis)])
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def live_meta(year: int) -> dict | None:
+    """What the live game-stats database says about its last pull (None if it has not been pulled). Re-read every 30 seconds, so a fresh pull shows without a restart."""
+    path = DATA / f"live_{year}.db"
+    if not path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return dict(conn.execute("SELECT key, value FROM live_meta"))
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def freshness(year: int) -> None:
+    """The sidebar's data-freshness box: how far the game stats run, and when the injury list and the projections were last refreshed."""
+    st.sidebar.markdown("**Data freshness**")
+    for lab, text in data_status.describe(data_status.read(DATA), live_meta(year)):
+        (st.sidebar.warning if lab == "Warning" else st.sidebar.caption)(text if lab == "Warning" else f"**{lab}:** {text}")
+
+
 def sidebar(ctx: Ctx) -> None:
-    """The sidebar every page shares: data notes, team names and the league's rules."""
+    """The sidebar every page shares: data freshness, data notes, team names and the league's rules."""
+    freshness(ctx.year)
     st.sidebar.caption(f"Projections for the {ctx.year}-{str(ctx.year + 1)[-2:]} season · {len(ctx.proj)} players")
     if ctx.proj["team"].str.endswith("*").any():
         st.sidebar.caption("* = on no current NBA roster as of the last data refresh (a free agent, or signed or traded since): his last known team is shown.")
@@ -259,7 +291,8 @@ def sidebar(ctx: Ctx) -> None:
 
 def load_context() -> Ctx:
     """Load everything a page needs, or stop the app with a message that says what to run."""
-    data = load_data()
+    stamp = data_stamp()
+    data = load_data(stamp)
     if data is None:
         st.error("No simulation library found. Run `python scripts/ingest.py`, `python scripts/build_projections.py` "
                  "and `python scripts/build_library.py` first.")
@@ -273,6 +306,6 @@ def load_context() -> Ctx:
     store.ensure_league(conn, LeagueSettings(name=LEAGUE, season=f"{year}-{str(year + 1)[-2:]}"))
     state = store.load_state(conn, LEAGUE)
     S = state.settings
-    engine = get_engine(proj, lib, S)
+    engine = get_engine(proj, lib, S, stamp)
     state.centers = set(engine.center_ids)  # C-eligible players count toward the roster cap
-    return Ctx(proj, proj.set_index("player_id"), lib, year, conn, state, S, engine, store.get_team_names(conn, LEAGUE, S.n_teams))
+    return Ctx(proj, proj.set_index("player_id"), lib, year, conn, state, S, engine, store.get_team_names(conn, LEAGUE, S.n_teams), stamp)
