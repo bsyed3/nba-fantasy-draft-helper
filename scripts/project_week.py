@@ -16,7 +16,8 @@ and per player: 0 = out or no game).
 How it works: the current week's category totals come from ESPN (they only include finished days). The days still to play come from the NBA
 schedule in nba.db; the Cup-week games that are not on the published schedule are placed at random, as in the draft library. Each day every
 team plays its best 10 healthy players who have a game (position slots are ignored). Players on IR or tagged OUT do not play unless
-known_absences.csv / known_absences_manual.csv has them back by that day. Beyond the known injuries, every player can also suffer a random
+known_absences.csv / known_absences_manual.csv has them back by that day (one with no return date at all is treated as gone for the rest of the
+season, and a WARNING names him so you can add a date). Beyond the known injuries, every player can also suffer a random
 injury spell (about 7% of days missed, spells of about 8 days, so a hurt starter is replaced by the bench) and a day-to-day tag settles
 within two days. Each player's per-game line is his ESPN season-to-date line blended with the preseason projection (worth 10 games).
 Every game is simulated (negative-binomial counts for rebounds, assists, steals, blocks, turnovers and shot attempts, binomial makes), with
@@ -49,7 +50,8 @@ CAT_NAMES = [c for c, _ in CATS]                                   # PTS 3PM REB
 SEASON = "2026-27"
 SID = dict(pts="0", tpm="17", tpa="18", reb="6", ast="3", stl="2", blk="1", tov="11", fgm="13", fga="14", ftm="15", fta="16")
 NB_R = dict(reb=10.5, ast=12.6, stl=9.7, blk=6.5, tov=33.5, fga=15.6, tpa=23.4, fta=3.1)      # negative-binomial dispersion, from the model's calibration
-BLEND_GAMES = 10                                                   # the preseason projection counts as this many games
+BLEND_GAMES = 10                                                   # the preseason projection counts as this many games. Kept at 10 on purpose: a walk-forward test on
+#                                                                    the 2026-27 box scores (Nov 20) found 5-10 indistinguishable, 20+ clearly worse, ESPN-only and preseason-only far worse.
 P_HEALTHY, P_DAY_TO_DAY, TALENT_SD = 0.93, 0.70, 0.10
 SPELL_DAYS = 8.0                                                   # mean length of a random injury spell; 7% of days are missed on average
 LINEUP_SIZE = 10
@@ -75,14 +77,18 @@ def load_absences() -> tuple[dict, pd.DataFrame]:
 
 def load_players(cx: Context, proj: pd.DataFrame, last_team: dict, absences: dict) -> pd.DataFrame:
     """Everyone on an ESPN roster (IR players only if a return date is known): blended per-game line, NBA team, injury tag, return date."""
-    rows = []
+    rows, undated = [], []
     slot_by_name = {t["name"]: cx.slot_of[t["id"]] for t in cx.teams}
     for t in cx.data["league"]["teams"]:
         for e in t["roster"]["entries"]:
             p = e["playerPoolEntry"]["player"]
             pid = cx.by_norm.get(normalize_name(p["fullName"]))
+            who = f"{cx.names[slot_by_name[t['name']] - 1]}'s {p['fullName']}"
             if e["lineupSlotId"] == 13 and pid not in absences:          # on IR with no known return date: assume he does not come back
+                undated.append(f"{who} (on IR, left out)")
                 continue
+            if p.get("injuryStatus") == "OUT" and pid not in absences:   # an undated OUT tag counts as out for the rest of the season
+                undated.append(f"{who} (tagged OUT, out all season)")
             s = next((x for x in p.get("stats", []) if x["id"] == "002027"), None)
             avg, tot = ((s.get("averageStats") or {}), (s.get("stats") or {})) if s else ({}, {})
             gp = float(tot.get("42") or 0)
@@ -94,6 +100,10 @@ def load_players(cx: Context, proj: pd.DataFrame, last_team: dict, absences: dic
             team = last_team.get(pid) if pid in last_team else (proj.loc[pid, "team_id"] if pid in proj.index else None)
             row["team"] = int(team) if team is not None and not pd.isna(team) else None
             rows.append(row)
+    if undated:
+        print("WARNING: ESPN gives no return date for " + "; ".join(undated) + ".\n"
+              "         The engine treats them as gone for the rest of the season. If you know better, add a row (player_id, name, games_out, return_date, note)\n"
+              "         to data/external/known_absences_manual.csv.")
     P = pd.DataFrame(rows)
     missing = P[P.team.isna()].name.tolist()
     if missing:

@@ -113,7 +113,8 @@ scores, so they come from `data/external/known_absences.csv` (`player_id` or `na
 `python scripts/fetch_espn_injuries.py` fills it from [ESPN's injuries page](https://www.espn.com/nba/injuries) -- every player labelled **Out**, with the estimated
 return date converted to games missed using the 2026-27 schedule (use `--html saved_page.html` if your network can't reach ESPN from Python, `--status Out "Day-To-Day"`
 to include day-to-day listings) -- then re-run `build_projections.py` + `build_library.py`. That file is regenerated on every run, so put your own judgments
-in `data/external/known_absences_manual.csv` (same columns; applied after the ESPN file, so it wins, and never overwritten). Without either, everyone is
+in `data/external/known_absences_manual.csv` (same columns; applied after the ESPN file, so it wins, and never overwritten). Return dates come from the ESPN page;
+keep the manual file for your own assumptions only (currently Murray, out until Dec 31, and Porzingis, out for the season) and delete a row once the page catches up. Without either, everyone is
 projected as active on opening night. `python scripts/export_projections.py` writes every player's projected stats to one Excel workbook.
 
 **Refreshing during the season:** `python scripts/fetch_espn_injuries.py && python scripts/build_projections.py --reuse-backtest && python scripts/build_library.py`
@@ -135,6 +136,8 @@ re-sign it, in which case the script stops and says so (use a phone hotspot, the
 **Projecting the week:** `python scripts/project_week.py` simulates the rest of the current matchup period (20,000 games-by-game runs from ESPN's banked totals, the NBA schedule, each team's best ten
 healthy players per day) and prints, for every matchup, each category's win chance, the chance of each final score and the chance to win the week. `--refresh` downloads a fresh ESPN copy first (same network checks
 as the sync), `--next` (or `--week 7`) projects a future week in full, `--team Bilal` shows one matchup, `--from YYYY-MM-DD` sets the first day still to be played (ESPN's totals only include finished days, so run it before tonight's games or pass tomorrow's date).
+Each player's per-game line is his ESPN season-to-date line blended with the preseason projection, which counts as 10 games (`BLEND_GAMES`; a walk-forward test on the season's box scores found 5-10 about equally good and 20+ worse).
+A player ESPN tags OUT, or puts on IR, with no return date is treated as gone for the rest of the season; the script prints a WARNING naming each one so you can add a return date to `data/external/known_absences_manual.csv`.
 
 Hand-curated overrides: put `data/external/projection_overrides.csv` (`player_id` or `name`, plus any of
 `mpg, avail, fga, fgm, tpa, tpm, fta, ftm, reb, ast, stl, blk, tov` per game) next to the DB and
