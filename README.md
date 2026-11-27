@@ -133,8 +133,10 @@ Put `leagueID`, `SWID` and `espn_s2` (from the browser cookies while logged in t
 re-sign it, in which case the script stops and says so (use a phone hotspot, then `--offline` re-runs from the cached download anywhere). `--dry-run` writes nothing; `--skip` leaves steps out;
 `--backup` copies `nba.db` first (off by default). The raw download lives in the gitignored `data/espn_cache/`. After a positions change, rerun `build_projections.py --reuse-backtest` and `build_library.py`.
 
+> **Note (2026-11-27):** `scripts/project_week.py` is missing from the local working copy. The copy in this repository is the older one from commit `9b37e68`, which does **not** have the 13-player roster limit described below.
+
 **Projecting the week:** `python scripts/project_week.py` simulates the rest of the current matchup period (20,000 games-by-game runs from ESPN's banked totals, the NBA schedule, each team's best ten
-healthy players per day) and prints, for every matchup, each category's win chance, the chance of each final score and the chance to win the week. `--refresh` downloads a fresh ESPN copy first (same network checks
+healthy players per day) and prints, for every matchup, each category's win chance, the chance of each final score and the chance to win the week. A roster holds 13 players plus one on IR, so on a day when nobody on a 14-man roster is known to be out, its lowest-value player is treated as cut (this applies to `project_season.py` and the playoffs too). `--refresh` downloads a fresh ESPN copy first (same network checks
 as the sync), `--next` (or `--week 7`) projects a future week in full, `--team Bilal` shows one matchup, `--from YYYY-MM-DD` sets the first day still to be played (ESPN's totals only include finished days, so run it before tonight's games or pass tomorrow's date).
 Each player's per-game line is his ESPN season-to-date line blended with the preseason projection, which counts as 10 games (`BLEND_GAMES`; a walk-forward test on the season's box scores found 5-10 about equally good and 20+ worse).
 A player ESPN tags OUT, or puts on IR, with no return date is treated as gone for the rest of the season; the script prints a WARNING naming each one so you can add a return date to `data/external/known_absences_manual.csv`.

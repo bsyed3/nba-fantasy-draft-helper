@@ -2,78 +2,76 @@ player_id,name,games_out,team,status,est_return,return_date
 1643539,Henri Veesaar,82,Atlanta Hawks,Out,Jul 1,2027-07-01
 1627732,Ben Simmons,82,Sacramento Kings,Out,Oct 1,2027-10-01
 1630574,Ariel Hukporti,82,Philadelphia 76ers,Out,Oct 1,2027-10-01
-1628978,Donte DiVincenzo,76,Minnesota Timberwolves,Out,Apr 2,2027-04-02
 1642364,Jamir Watkins,76,Washington Wizards,Out,Apr 2,2027-04-02
 1642854,Asa Newell,69,Atlanta Hawks,Out,Mar 17,2027-03-17
 1631114,Jalen Williams,60,Oklahoma City Thunder,Out,Mar 2,2027-03-02
-1631101,Shaedon Sharpe,60,Portland Trail Blazers,Out,Mar 2,2027-03-02
 1641717,Cason Wallace,60,Oklahoma City Thunder,Out,Mar 2,2027-03-02
+1631101,Shaedon Sharpe,60,Portland Trail Blazers,Out,Mar 2,2027-03-02
 1641757,Jordan Miller,59,LA Clippers,Out,Mar 2,2027-03-02
 1630551,Justin Champagnie,58,Washington Wizards,Out,Feb 25,2027-02-25
-1642850,Thomas Sorber,48,Oklahoma City Thunder,Out,Jan 31,2027-01-31
 1631109,Mark Williams,48,Phoenix Suns,Out,Feb 3,2027-02-03
+1642850,Thomas Sorber,48,Oklahoma City Thunder,Out,Jan 31,2027-01-31
 1642849,Nolan Traore,46,Brooklyn Nets,Out,Jan 27,2027-01-27
 1641713,GG Jackson,42,Memphis Grizzlies,Out,Jan 18,2027-01-18
 1630249,Vít Krejčí,37,Portland Trail Blazers,Out,Jan 12,2027-01-12
+1628978,Donte DiVincenzo,35,Minnesota Timberwolves,Out,Jan 3,2027-01-03
 1628374,Lauri Markkanen,35,Utah Jazz,Out,Jan 4,2027-01-04
-1642277,Johnny Furphy,33,Indiana Pacers,Out,Jan 2,2027-01-02
 1631096,Chet Holmgren,33,Oklahoma City Thunder,Out,Jan 2,2027-01-02
-202710,Jimmy Butler III,33,Golden State Warriors,Out,Jan 2,2027-01-02
 1641767,Ben Sheppard,33,Indiana Pacers,Out,Jan 2,2027-01-02
 204001,Kristaps Porziņģis,33,Golden State Warriors,Out,Jan 2,2027-01-02
+202710,Jimmy Butler III,33,Golden State Warriors,Out,Jan 2,2027-01-02
+1627752,Taurean Prince,29,Detroit Pistons,Out,Dec 26,2026-12-26
+1643409,Cameron Boozer,29,Memphis Grizzlies,Out,Dec 21,2026-12-21
 1630162,Anthony Edwards,28,Minnesota Timberwolves,Out,Dec 21,2026-12-21
-1628991,Jaren Jackson Jr.,25,Utah Jazz,Out,Dec 14,2026-12-14
 203468,CJ McCollum,25,Atlanta Hawks,Out,Dec 19,2026-12-19
-203924,Jerami Grant,24,Memphis Grizzlies,Out,Dec 12,2026-12-12
+1628991,Jaren Jackson Jr.,25,Utah Jazz,Out,Dec 14,2026-12-14
 1642844,Dylan Harper,24,San Antonio Spurs,Out,Dec 13,2026-12-13
-1630169,Tyrese Haliburton,23,Indiana Pacers,Out,Dec 13,2026-12-13
-1643519,Jayden Quaintance,23,San Antonio Spurs,Out,Dec 3,2026-12-03
+1630590,Scotty Pippen Jr.,24,Memphis Grizzlies,Out,Dec 12,2026-12-12
+203924,Jerami Grant,24,Memphis Grizzlies,Out,Dec 12,2026-12-12
 202699,Tobias Harris,23,San Antonio Spurs,Out,Dec 3,2026-12-03
-1631243,Mouhamed Gueye,22,Atlanta Hawks,Out,Dec 12,2026-12-12
+1643519,Jayden Quaintance,23,San Antonio Spurs,Out,Dec 3,2026-12-03
+1630169,Tyrese Haliburton,23,Indiana Pacers,Out,Dec 13,2026-12-13
 1643410,Caleb Wilson,22,Chicago Bulls,Out,Dec 13,2026-12-13
+1643536,Ebuka Okorie,22,Detroit Pistons,Out,Dec 13,2026-12-13
 201939,Stephen Curry,22,Golden State Warriors,Out,Dec 12,2026-12-12
-1627752,Taurean Prince,22,Detroit Pistons,Out,Dec 13,2026-12-13
+1631243,Mouhamed Gueye,22,Atlanta Hawks,Out,Dec 12,2026-12-12
 1641736,Reece Beekman,22,Washington Wizards,Out,Dec 3,2026-12-03
 1629628,RJ Barrett,22,Toronto Raptors,Out,Dec 13,2026-12-13
-1641740,Jaylen Clark,20,Minnesota Timberwolves,Out,Nov 29,2026-11-29
-1642851,Kon Knueppel,20,Charlotte Hornets,Out,Dec 12,2026-12-12
-203994,Jusuf Nurkić,20,Utah Jazz,Out,Nov 29,2026-11-29
-202695,Kawhi Leonard,20,Toronto Raptors,Out,Dec 3,2026-12-03
 1629630,Ja Morant,20,Portland Trail Blazers,Out,Dec 1,2026-12-01
 1630541,Moses Moody,20,Golden State Warriors,Out,Dec 1,2026-12-01
-1641772,Nae'Qwan Tomlin,19,Cleveland Cavaliers,Out,Nov 29,2026-11-29
-1627749,Dejounte Murray,19,New Orleans Pelicans,Out,Nov 27,2026-11-27
+203994,Jusuf Nurkić,20,Utah Jazz,Out,Nov 29,2026-11-29
+203471,Dennis Schröder,20,Charlotte Hornets,Out,Dec 12,2026-12-12
+1642851,Kon Knueppel,20,Charlotte Hornets,Out,Dec 12,2026-12-12
+1642875,Maxime Raynaud,20,Sacramento Kings,Out,Dec 2,2026-12-02
+1641774,Tristan Vukcevic,20,Washington Wizards,Out,Nov 30,2026-11-30
+202695,Kawhi Leonard,20,Toronto Raptors,Out,Dec 3,2026-12-03
+1641740,Jaylen Clark,20,Minnesota Timberwolves,Out,Nov 29,2026-11-29
+1643530,Aday Mara,19,Oklahoma City Thunder,Out,Nov 28,2026-11-28
 1630570,Trendon Watford,19,New Orleans Pelicans,Out,Nov 27,2026-11-27
+1641772,Nae'Qwan Tomlin,19,Cleveland Cavaliers,Out,Nov 29,2026-11-29
+1631105,Jalen Duren,19,Detroit Pistons,Out,Nov 30,2026-11-30
 1630596,Evan Mobley,19,Cleveland Cavaliers,Out,Nov 29,2026-11-29
+1642260,Nikola Topić,19,Oklahoma City Thunder,Out,Nov 28,2026-11-28
 1631097,Bennedict Mathurin,19,New Orleans Pelicans,Out,Nov 27,2026-11-27
-1643593,Izaiyah Nelson,18,Orlando Magic,Out,Nov 29,2026-11-29
-1631094,Paolo Banchero,18,Orlando Magic,Out,Nov 29,2026-11-29
-1641774,Tristan Vukcevic,18,Washington Wizards,Out,Nov 24,2026-11-24
-1642869,Noah Penda,18,Orlando Magic,Out,Nov 29,2026-11-29
-1628371,Jonathan Isaac,18,Orlando Magic,Out,Nov 29,2026-11-29
+1627749,Dejounte Murray,19,New Orleans Pelicans,Out,Nov 27,2026-11-27
+1631119,Jaylin Williams,19,Oklahoma City Thunder,Out,Nov 28,2026-11-28
 1626181,Norman Powell,18,Chicago Bulls,Out,Nov 28,2026-11-28
+1643588,Tobi Lawal,18,Dallas Mavericks,Out,Nov 27,2026-11-27
+1630559,Austin Reaves,18,Los Angeles Lakers,Out,Nov 27,2026-11-27
+1629011,Mitchell Robinson,18,Boston Celtics,Out,Nov 27,2026-11-27
+1628371,Jonathan Isaac,18,Orlando Magic,Out,Nov 29,2026-11-29
+203903,Jordan Clarkson,18,New York Knicks,Out,Nov 27,2026-11-27
 1642959,Chris Youngblood,18,Portland Trail Blazers,Out,Nov 27,2026-11-27
-1641726,Dereck Lively II,18,Dallas Mavericks,Out,Nov 27,2026-11-27
+1628384,OG Anunoby,18,New York Knicks,Out,Nov 27,2026-11-27
 1641844,Tarik Biberovic,18,Dallas Mavericks,Out,Nov 27,2026-11-27
 1643547,Sergio de Larrea,18,Dallas Mavericks,Out,Nov 27,2026-11-27
-1643409,Cameron Boozer,18,Memphis Grizzlies,Out,Nov 25,2026-11-25
-1630559,Austin Reaves,18,Los Angeles Lakers,Out,Nov 27,2026-11-27
+1641726,Dereck Lively II,18,Dallas Mavericks,Out,Nov 27,2026-11-27
 203078,Bradley Beal,18,LA Clippers,Out,Nov 29,2026-11-29
-1630590,Scotty Pippen Jr.,18,Memphis Grizzlies,Out,Nov 25,2026-11-25
-1631121,Bryce McGowens,18,New Orleans Pelicans,Out,Nov 23,2026-11-23
-1641737,Adem Bona,17,Philadelphia 76ers,Out,Nov 23,2026-11-23
-1631172,Ousmane Dieng,17,Milwaukee Bucks,Out,Nov 23,2026-11-23
-1630314,Brandon Williams,17,Golden State Warriors,Out,Nov 25,2026-11-25
-1642281,Jaylon Tyson,17,Cleveland Cavaliers,Out,Nov 23,2026-11-23
+1642869,Noah Penda,18,Orlando Magic,Out,Nov 29,2026-11-29
+1643593,Izaiyah Nelson,18,Orlando Magic,Out,Nov 29,2026-11-29
+1631094,Paolo Banchero,18,Orlando Magic,Out,Nov 29,2026-11-29
 1629111,Jock Landale,17,Atlanta Hawks,Out,Nov 27,2026-11-27
-1629011,Mitchell Robinson,17,Boston Celtics,Out,Nov 24,2026-11-24
-1631124,Julian Strawther,17,Denver Nuggets,Out,Nov 29,2026-11-29
-1643588,Tobi Lawal,17,Dallas Mavericks,Out,Nov 24,2026-11-24
-1642927,Nate Bittle,17,Toronto Raptors,Out,Nov 27,2026-11-27
-203903,Jordan Clarkson,17,New York Knicks,Out,Nov 25,2026-11-25
-1642875,Maxime Raynaud,17,Sacramento Kings,Out,Nov 25,2026-11-25
+1628960,Grayson Allen,17,Charlotte Hornets,Out,Nov 28,2026-11-28
+1629021,Moritz Wagner,17,Brooklyn Nets,Out,Nov 27,2026-11-27
 1629130,Duncan Robinson,17,Detroit Pistons,Out,Nov 27,2026-11-27
-203471,Dennis Schröder,16,Charlotte Hornets,Out,Nov 25,2026-11-25
-1629684,Grant Williams,16,Charlotte Hornets,Out,Nov 25,2026-11-25
-1628960,Grayson Allen,16,Charlotte Hornets,Out,Nov 25,2026-11-25
-1631105,Jalen Duren,16,Detroit Pistons,Out,Nov 24,2026-11-24
+1642927,Nate Bittle,17,Toronto Raptors,Out,Nov 27,2026-11-27

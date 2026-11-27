@@ -1,4 +1,8 @@
 date,action,slot,team,to_team,player,player_id
+2026-11-26 00:43,FA_ADD,2,Patrick,,Kevin Porter Jr.,1629645
+2026-11-26 00:43,DROP,2,Patrick,,Klay Thompson,202691
+2026-11-23 22:40,DROP,2,Patrick,,Daniss Jenkins,1642450
+2026-11-23 22:40,FA_ADD,2,Patrick,,De'Andre Hunter,1629631
 2026-11-22 21:56,FA_ADD,1,Bilal,,Peyton Watson,1631212
 2026-11-22 21:56,DROP,1,Bilal,,Aday Mara,1643530
 2026-11-21 22:15,FA_ADD,1,Bilal,,Aday Mara,1643530
