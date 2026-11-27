@@ -15,7 +15,8 @@ and per player: 0 = out or no game).
 
 How it works: the current week's category totals come from ESPN (they only include finished days). The days still to play come from the NBA
 schedule in nba.db; the Cup-week games that are not on the published schedule are placed at random, as in the draft library. Each day every
-team plays its best 10 healthy players who have a game (position slots are ignored). Players on IR or tagged OUT do not play unless
+team plays its best 10 healthy players who have a game (position slots are ignored). A roster holds 13 players plus one on IR: on a day when
+nobody on a 14-man roster is known to be out, its lowest-value player is treated as cut. Players on IR or tagged OUT do not play unless
 known_absences.csv / known_absences_manual.csv has them back by that day (one with no return date at all is treated as gone for the rest of the
 season, and a WARNING names him so you can add a date). Beyond the known injuries, every player can also suffer a random
 injury spell (about 7% of days missed, spells of about 8 days, so a hurt starter is replaced by the bench) and a day-to-day tag settles
@@ -55,6 +56,7 @@ BLEND_GAMES = 10                                                   # the preseas
 P_HEALTHY, P_DAY_TO_DAY, TALENT_SD = 0.93, 0.70, 0.10
 SPELL_DAYS = 8.0                                                   # mean length of a random injury spell; 7% of days are missed on average
 LINEUP_SIZE = 10
+ACTIVE_ROSTER = 13                                                 # 10 starters + 3 bench; a 14th player only fits on IR, so only while someone is out
 
 
 def load_absences() -> tuple[dict, pd.DataFrame]:
@@ -154,6 +156,16 @@ def make_plays_fn(S, week_idx: int, sims: int, rng):
     return fn
 
 
+def playable_roster(squad: list, day: str, today: dt.date) -> list:
+    """
+    The part of a roster (list of (index, row), best value first) that can legally be held on `day`. With more than ACTIVE_ROSTER players, the extra
+    one has to be on IR, which needs someone who is known to be out. Once nobody is, the lowest-value player is cut (random injury spells don't count).
+    """
+    if len(squad) > ACTIVE_ROSTER and all(base_avail(r, day, today) > 0 for _, r in squad):
+        return squad[:ACTIVE_ROSTER]
+    return squad
+
+
 def simulate_period(P: pd.DataFrame, plays_fn, days: list[str], sims: int, rng, today: dt.date, talent: dict | None = None, health: dict | None = None):
     """
     Per team: simulated sums over `days` of [pts, 3pm, reb, ast, stl, blk, fgm, fga, ftm, fta, tov], and the number of lineup games used.
@@ -178,7 +190,7 @@ def simulate_period(P: pd.DataFrame, plays_fn, days: list[str], sims: int, rng, 
             health[i] = np.where(health[i], u > rec, u < q)
         for s in teams:
             cand = []
-            for i, r in roster[s]:
+            for i, r in playable_roster(roster[s], day, today):
                 g = plays_fn(r.team, day)
                 p = base_avail(r, day, today) if g is not None else 0.0
                 if p > 0:
